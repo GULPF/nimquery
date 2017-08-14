@@ -4,16 +4,15 @@
 #  - Some selectors are unique in the context of siblings. I can use this for optimizations.
 #  - There are some very specific optmization which might be worth it.
 #    E.g :only-child can disqualify all siblings at once.
-
 import xmltree
 import strutils
 import strtabs
-import strutils
+import unicode
 
 const DEBUG = false
 
 type
-    ParseError = object of Exception
+    ParseError* = object of Exception
 
     TokenKind = enum
         tkBracketStart, tkBracketEnd
@@ -22,7 +21,7 @@ type
         # NOTE: These are handled the same in some contexts, but they are different.
         #       `tkIdentifier` can only contain a very specific subset of characters,
         #       but tkString can contain anything.
-        #       This means that both `#foo%` and `[id=foo%]` is invalid, but not `[id="foo%"]`.
+        #       This means that both `#foo%` and `[id=foo%]` is invalid, but not `[id="foo%"]` or `#foo\%`.
         tkIdentifier, tkString
 
         tkClass, tkId, tkElement, tkUniversal
@@ -65,7 +64,7 @@ const nthKinds = {
 
 type
     Demand = ref object
-        case kind: Tokenkind:
+        case kind: Tokenkind
         of attributeKinds:
             attrName, attrValue: string
         of nthKinds:
@@ -89,8 +88,8 @@ type
         demands: seq[Demand]
         combinator: Combinator
 
-const beginingIdentifiers = Letters
-const identifiers = Letters + Digits + { '-', '_' }
+const beginingIdentifiers = Letters + { '-', '\\' }
+const identifiers = Letters + Digits + { '-', '_', '\\' }
 const combinators = { ' ', '+', '~', '>' }
 
 const pseudoNoParamsKinds = {
@@ -104,6 +103,14 @@ const combinatorKinds = {
     tkCombinatorChildren, tkCombinatorDescendents,
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
+
+proc safeCharCompare(str: string, idx: int, cs: set[char]): bool {. inline .} =
+    if idx > high(str): return false
+    if idx < low(str): return false
+    return str[idx] in cs
+
+proc safeCharCompare(str: string, idx: int, c: char): bool {. inline .} =
+    return str.safeCharCompare(idx, { c })
 
 proc child(pair: NodeWithParent): XmlNode =
     return pair.parent[pair.index]
@@ -214,6 +221,71 @@ proc readNumerics(input: string, idx: var int, buffer: var string) =
     while input[idx] in Digits:
         buffer.add input[idx]
         idx.inc
+
+proc readEscape(input: string, idx: var int, buffer: var string) =
+    const hexInput = HexDigits + { ' ' }
+    var codePointStr = ""
+    idx.inc
+    while input[idx] in hexInput and codePointStr.len < 6:
+        if input[idx] != ' ':
+            codePointStr.add input[idx]
+            idx.inc
+        else:
+            idx.inc
+            break
+
+    if codePointStr.isNilOrEmpty:
+        buffer.add input[idx]
+        idx.inc
+    else:
+        let unicodeCharacter = codePointStr.parseHexInt.Rune.toUTF8
+        buffer.add unicodeCharacter
+
+proc readStringLiteral(input: string, idx: var int, buffer: var string) =
+    if input[idx] notin { '\'', '"' }: return 
+
+    let ch = input[idx]
+    idx.inc
+
+    while input[idx] != ch:
+        if input[idx] == '\\':
+            readEscape(input, idx, buffer)
+
+        else:
+            buffer.add input[idx]
+            idx.inc
+
+        if idx > high(input):
+            raise newException(ParseError, "Non-terminated string")
+
+    idx.inc
+
+proc readIdentifier(input: string, idx: var int, buffer: var string) =
+    if input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits):
+        raise newUnexpectedCharacterException(input[idx + 1])
+
+    while input[idx] in identifiers and idx < input.len:
+        if input[idx] == '\\':
+            const hexInput = HexDigits + { ' ' }
+            var codePointStr = ""
+            idx.inc
+            while input[idx] in hexInput and codePointStr.len < 6:
+                if input[idx] != ' ':
+                    codePointStr.add input[idx]
+                    idx.inc
+                else:
+                    idx.inc
+                    break
+
+            if codePointStr.isNilOrEmpty:
+                buffer.add input[idx]
+                idx.inc
+            else:
+                let unicodeCharacter = codePointStr.parseHexInt.Rune.toUTF8
+                buffer.add unicodeCharacter
+        else:
+            buffer.add input[idx]
+            idx.inc
 
 proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
     let input = raw.strip
@@ -379,40 +451,33 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], query: var Quer
         if stack[^2].kind == tkClass:
             let demand = newDemand(tkAttributeItem, "class", prev.value)
             demandStack.add demand
-            stack.delete peek
-            stack.delete peek - 1
+            stack.setLen stack.len - 2
 
         elif stack[^2].kind == tkId:
             let demand = newDemand(tkAttributeExact, "id", prev.value)
             demandStack.add demand
-            stack.delete peek
-            stack.delete peek - 1
+            stack.setLen stack.len - 2
 
     of tkElement:
         let demand = newDemand(tkElement, prev.value)
         demandStack.add demand
-        stack.delete peek
+        stack.setLen stack.len - 1
 
     of tkBracketEnd:
         if stack[^3].kind in attributeKinds - { tkAttributeExists }:
             let demand = newAttributeDemand(stack[^3].kind, stack[^4].value, stack[^2].value)
             demandStack.add demand
-            stack.delete peek
-            stack.delete peek - 1
-            stack.delete peek - 2
-            stack.delete peek - 3
-            stack.delete peek - 4
+            stack.setLen stack.len - 5
 
         else:
             let demand = newDemand(tkAttributeExists,stack[^2].value, "")
             demandStack.add demand
-            stack.delete peek
-            stack.delete peek - 1
+            stack.setLen stack.len - 3
 
     of pseudoNoParamsKinds:
         let demand = newPseudoDemand(prev.kind)
         demandStack.add demand
-        stack.delete peek
+        stack.setLen stack.len - 1
 
     of tkParam:
         # It's bit inelegant to do parsing of pseudo arguments here,
@@ -432,15 +497,13 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], query: var Quer
             # Safe because we know it's a simple selector
             let demand = newDemand(tkPseudoNot, subquery.demands[0])
             demandStack.add demand
-            stack.delete peek
-            stack.delete peek - 1
+            stack.setLen stack.len - 2
 
         of nthKinds:
             let (a, b) = parsePseudoNthArguments(prev.value)
             let demand = newPseudoDemand(stack[^2].kind, a, b)
             demandStack.add demand
-            stack.delete peek
-            stack.delete peek - 1
+            stack.setLen stack.len - 2
 
         else:
             raise newException(ParseError, "Unexpected params")
@@ -457,12 +520,7 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], query: var Quer
 
     else: discard
 
-proc safeCharCompare(str: string, idx: int, c: char): bool =
-    if idx > high(str): return false
-    if idx < low(str): return false
-    return str[idx] == c
-
-proc isFinisedSimpleSelector(prev: Token, prevPrev: Token): bool =
+proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     if prev.isNil:
         return false
     if prev.kind in { tkBracketEnd, tkParam, tkElement } + pseudoNoParamsKinds:
@@ -490,18 +548,12 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
 
         of { '"', '\'' }:
             var buffer = ""
-            idx.inc
-            while input[idx] != ch:
-                buffer.add input[idx]
-                idx.inc
-                if idx > max:
-                    raise newException(ParseError, "Non-terminated string")
-            idx.inc
+            readStringLiteral(input, idx, buffer)
             token = newToken(tkString, buffer)
 
         of ' ':
             if idx + 1 < input.len and input[idx + 1] notin combinators and
-                    isFinisedSimpleSelector(prevToken, prevPrevtoken):
+                    isFinishedSimpleSelector(prevToken, prevPrevtoken):
                 token = newToken(tkCombinatorDescendents)
             else:
                 skip = true
@@ -556,7 +608,9 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
                 idx.inc 2
             else:
                 idx.inc
-                token = newToken(tkUniversal)
+                # No need to emit since tkUniversal matches everything?
+                # token = newToken(tkUniversal)
+                skip = true
 
         # Parentheses can only occur around the arguments of a pseudo class,
         # and inside a string (handled above.)
@@ -575,10 +629,7 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
 
         of beginingIdentifiers:
             var buffer = ""
-
-            while input[idx] in identifiers and idx < input.len:
-                buffer.add input[idx]
-                idx.inc
+            readIdentifier(input, idx, buffer)
 
             if prevToken.isNil or prevToken.kind in combinatorKinds:
                 token = newToken(tkElement, buffer)
@@ -774,8 +825,8 @@ proc execRecursive(query: Query, root: NodeWithParent, combinator: Combinator,
     
     var position = root
 
-    template search(itrName: iterator(q: Query, p: NodeWithParent): NodeWithParent {. inline .}): typed =
-        for next in itrName(query, position):
+    template search(itr: iterator(q: Query, p: NodeWithParent): NodeWithParent {. inline .}): typed =
+        for next in itr(query, position):
             if query.nextQuery.isNil:
                 output.add next.child
             else:
@@ -809,18 +860,23 @@ proc parseHtmlQuery*(queryString: string): Query =
     var stack = newSeq[Token]()
     var demandStack = newSeq[Demand]()
 
-    for idx, token in tokenize(queryString):
+    template printDebug(token: string) =
         when DEBUG:
             echo "token: " & $token
             echo "stack: " & $stack
             echo "demands: " & $demandStack
             echo "* * *"
 
+    for idx, token in tokenize(queryString):
+        printDebug($token)
         stack.add token
         reduce(stack, demandStack, query)
 
     when DEBUG:
-        echo "rem: " & $stack
+        printDebug("n/a")
+
+    if stack.len > 0:
+        raise newException(ParseError, "Unexpected end of input")
 
     query.append demandStack, cmLeaf
 

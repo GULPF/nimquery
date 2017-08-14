@@ -159,6 +159,8 @@ const html = """
             <div class="test36"></div>
             <div class="test36"></div>
         </div>
+
+        <div id="test37'"></div>
     </body>
 </html>
 """
@@ -178,7 +180,7 @@ suite "nimquery":
 
     test "id selector":
         let el = xml.querySelector("#test1")
-        check(el != nil)
+        check(not el.isNil)
         check(el.tag == "p")
 
     test "class selector":
@@ -427,3 +429,30 @@ suite "nimquery":
         for query in queries:
             let els = xml.querySelectorAll(query)
             check(els.len == 3)
+
+    test "escaping strings":
+        var queries = [
+            r"[id = 'test37\'']",
+            r"[id = 'test37\0027']",
+            r"[id = 'test37\27']",
+            r"[id = '\000074est37\'']",
+            r"[id = '\74 est37\'']",
+            r"[id = '\test37\'']"
+        ]
+
+        for query in queries:
+            var el = xml.querySelector(query)
+            check(not el.isNil)
+        
+        # Escapes are allowed in identifiers as well
+        var el = xml.querySelector(r"#\74 est37\'")
+        check(not el.isNil)
+
+    test "identifier parsing":
+        let disallowedIdentifiers = [
+            "--foo", "-23", "_23"
+        ]
+
+        for ident in disallowedIdentifiers:
+            expect ParseError:
+                discard parseHtmlQuery(ident)

@@ -1,5 +1,5 @@
 # nimquery
-Library for querying HTML using CSS-selectors
+A library for querying HTML using CSS-selectors, like JavaScripts `document.querySelector`.
 
 ## Usage
 ```nim
@@ -32,17 +32,24 @@ proc querySelectorAll*(queryString: string): seq[XmlNode]
 ```
 Get all elements matching `queryString`.
 
+- - -
+
 ```nim
 proc querySelector*(queryString: string): XmlNode
 ```
-Get the first element matching `queryString`.
+Get the first element matching `queryString`, or `nil` if no such element exists.
+
+- - -
 
 ```nim
 proc parseHtmlQuery*(queryString: string): Query
 ```
 Parses a query for later use.
 
+- - -
+
 ```nim
 proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode]
 ```
 Execute an already parsed query. If `single = true`, it will never return more than one element.
+

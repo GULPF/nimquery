@@ -161,6 +161,9 @@ const html = """
         </div>
 
         <div id="test37'"></div>
+
+        <div id="test38-first"></div>
+        <div id="test38-second"></div>
     </body>
 </html>
 """
@@ -456,3 +459,7 @@ suite "nimquery":
         for ident in disallowedIdentifiers:
             expect ParseError:
                 discard parseHtmlQuery(ident)
+
+    test "comma operator":
+        var els = xml.querySelectorAll("#test38-first, #test38-second")
+        check(els.len == 2)

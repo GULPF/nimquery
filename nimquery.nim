@@ -17,6 +17,7 @@ type
     TokenKind = enum
         tkBracketStart, tkBracketEnd
         tkParam
+        tkComma
 
         # NOTE: These are handled the same in some contexts, but they are different.
         #       `tkIdentifier` can only contain a very specific subset of characters,
@@ -63,7 +64,7 @@ const nthKinds = {
 }
 
 type
-    Demand = ref object
+    DemandRef = ref object
         case kind: Tokenkind
         of attributeKinds:
             attrName, attrValue: string
@@ -75,6 +76,8 @@ type
             element: string
         else: discard
 
+    Demand = DemandRef not nil
+
     NodeWithParent = tuple
         parent: XmlNode
         index, elementIndex: int
@@ -82,9 +85,19 @@ type
     Combinator = enum
         cmChildren, cmDescendants, cmNextSibling, cmSiblings
         cmLeaf # Special case for the last query
-
+    
+    # Because of the comma operator, a query can consist of multiple actual queries.
     Query* = ref object
-        nextQuery: Query
+        roots: seq[QueryRoot]
+
+    QueryRoot = ref object
+        # Will never contain more than one element while parsing.
+        # When optmizing comma queries, partialy identical queries are merged
+        # and stored as a seq.
+        # F.ex the query "div p, div a" will generate two queries,
+        # but since the left-most subqueries ("div") are identical, they can be merged
+        # so that the first subquery is only executed once.
+        nextQuery: seq[QueryRoot]
         demands: seq[Demand]
         combinator: Combinator
 
@@ -184,24 +197,24 @@ proc `$`(token: Token): string =
     else:
         result.add "]"
 
-proc newQuery(demands: seq[Demand], combinator: Combinator): Query =
-    return Query(demands: demands, nextQuery: nil, combinator: combinator)
+proc newQueryRoot(demands: seq[Demand], combinator: Combinator): QueryRoot =
+    return QueryRoot(demands: demands, nextQuery: nil, combinator: combinator)
 
-proc `$`(q: Query): string =
+proc `$`(q: QueryRoot): string =
     result = q.demands.join(", ") & " " & $q.combinator
 
-    if not q.nextQuery.isNil:
+    if q.nextQuery.len > 0:
         result.add "\n" & $q.nextQuery
-proc append(q: var Query, demands: seq[Demand], combinator: Combinator) =
+proc append(q: var QueryRoot, demands: seq[Demand], combinator: Combinator) =
     if q.isNil:
-        q = newQuery(demands, combinator)
+        q = newQueryRoot(demands, combinator)
     else:
         var itr = q
-        while not itr.nextQuery.isNil:
-            itr = itr.nextQuery
-        itr.nextQuery = newQuery(demands, combinator)
+        while itr.nextQuery.len > 0:
+            itr = itr.nextQuery[0]
+        itr.nextQuery = @[ newQueryRoot(demands, combinator) ]
 
-proc canFindMultiple(q: Query, comb: Combinator): bool =
+proc canFindMultiple(q: QueryRoot, comb: Combinator): bool =
     # Returns true if the current queries demands can be satiesfied by multiple elements.
     # This is used to check if the search should stop after the first element has been found.
     for demand in q.demands:
@@ -215,7 +228,7 @@ proc canFindMultiple(q: Query, comb: Combinator): bool =
     return true
 
 proc isSimpleSelector(q: Query): bool =
-    return q.demands.len == 1 and q.nextQuery.isNil
+    return q.roots.len == 1 and q.roots[0].demands.len == 1 and q.roots[0].nextQuery.len == 0
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
     while input[idx] in Digits:
@@ -438,7 +451,7 @@ proc getCombinator(kind: TokenKind): Combinator =
         raise newException(ParseError, "Unknown combinator: " & $kind)
 
 proc parseHtmlQuery*(queryString: string): Query # Forward declare for usage in `reduce`
-proc reduce(stack: var seq[Token], demandStack: var seq[Demand], query: var Query) =
+proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var QueryRoot, query: Query) =
     if stack.len == 0:
         return
 
@@ -488,14 +501,16 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], query: var Quer
 
         of tkPseudoNot:
             # Not the cleanest way to this, but eh
-            let subquery = parseHtmlQuery(prev.value)
+            let notQuery = parseHtmlQuery(prev.value)
 
-            if not subquery.isSimpleSelector:
+            if not notQuery.isSimpleSelector:
                 raise newException(ParseError,
-                    ":not argument must be a simple selector. Was: " & repr(subquery))
+                    ":not argument must be a simple selector. Was: " & repr(notQuery))
             
+            var notQueryRoot = notQuery.roots[0]
+
             # Safe because we know it's a simple selector
-            let demand = newDemand(tkPseudoNot, subquery.demands[0])
+            let demand = newDemand(tkPseudoNot, notQueryRoot.demands[0])
             demandStack.add demand
             stack.setLen stack.len - 2
 
@@ -514,9 +529,18 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], query: var Quer
                 "Invalid parser state. Expected stack length to be 1. Stack: " & repr(stack))
 
         let combinator = getCombinator(prev.kind)
-        query.append(demandStack, combinator)
+        queryRoot.append demandStack, combinator
         stack = @[]
         demandStack = @[]
+
+    of tkComma:
+        if stack.len != 1:
+            raise newUnexpectedCharacterException(',')
+        queryRoot.append demandStack, cmLeaf
+        query.roots.add queryRoot
+        stack = @[]
+        demandStack = @[]
+        queryRoot = nil
 
     else: discard
 
@@ -612,9 +636,6 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
                 # token = newToken(tkUniversal)
                 skip = true
 
-        # Parentheses can only occur around the arguments of a pseudo class,
-        # and inside a string (handled above.)
-        # Note that e.g `#foo(` is invalid, but `[id="foo("]` is OK.
         of '(':
             var buffer = ""
             idx.inc
@@ -655,10 +676,16 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
                 token = newToken(tkAttributeEnd)
                 idx.inc 2
 
-        else:
-            raise newException(ParseError, "Unexpected input: " & ch)
+        of ',':
+            token = newToken(tkComma)
+            idx.inc
+
+        else: discard
 
         if not skip:
+            if token.isNil:
+                raise newUnexpectedCharacterException(ch)
+
             # TODO: It might be wise to perform some validation here.
             #       e.g tkParam is only valid after tkPseudoNot tkPseudoNth*
             prevPrevtoken = prevToken
@@ -789,50 +816,51 @@ proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
 
     return true
 
-iterator searchDescendants(query: Query, position: NodeWithParent): NodeWithParent =
+iterator searchDescendants(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent =
     var queue = newSeq[NodeWithParent]()
     for nodeData in position.child.elements:
         queue.add((parent: position.child, index: nodeData.index, elementIndex: nodeData.elementIndex))
 
     while queue.len > 0:
         let pair = queue.pop()
-        if pair.satisfies query.demands:
+        if pair.satisfies queryRoot.demands:
             yield pair
         for nodeData in pair.child.elements:
             queue.insert((parent: pair.child, index: nodeData.index, elementIndex: nodeData.elementIndex), 0)
 
-iterator searchChildren(query: Query, position: NodeWithParent): NodeWithParent =
+iterator searchChildren(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent =
     for pair in position.child.elements:
-        if pair.satisfies query.demands:
+        if pair.satisfies queryRoot.demands:
             yield pair
 
-iterator searchSiblings(query: Query, position: NodeWithParent): NodeWithParent = 
+iterator searchSiblings(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent = 
     for pair in position.parent.elements:
-        if pair.child != position.child and pair.satisfies query.demands:
+        if pair.child != position.child and pair.satisfies queryRoot.demands:
             yield pair
 
-iterator searchNextSibling(query: Query, position: NodeWithParent): NodeWithParent =
+iterator searchNextSibling(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent =
     # It's a bit silly to have an iterator which will only yield 0 or 1 element,
     # but it's nice for consistency with how the other combinators are implemented.
     
     for pair in position.parent.elements(offset = position):
-        if pair.satisfies query.demands:
+        if pair.satisfies queryRoot.demands:
             yield pair
         break # by definition, there can only be one next sibling
 
-proc execRecursive(query: Query, root: NodeWithParent, combinator: Combinator,
+proc execRecursive(queryRoot: QueryRoot, root: NodeWithParent, combinator: Combinator,
         single: static[bool], output: var seq[XmlNode]) =
     
     var position = root
 
-    template search(itr: iterator(q: Query, p: NodeWithParent): NodeWithParent {. inline .}): typed =
-        for next in itr(query, position):
-            if query.nextQuery.isNil:
+    template search(itr: iterator(q: QueryRoot, p: NodeWithParent): NodeWithParent {. inline .}): typed =
+        for next in itr(queryRoot, position):
+            if queryRoot.nextQuery.len == 0:
                 output.add next.child
             else:
-                query.nextQuery.execRecursive(next, query.combinator, single, output)
+                for subquery in queryRoot.nextQuery:
+                    subquery.execRecursive(next, queryRoot.combinator, single, output)
 
-            if not query.canFindMultiple(combinator): break
+            if not queryRoot.canFindMultiple(combinator): break
             when single:
                 if output.len > 0:
                     break
@@ -853,10 +881,12 @@ proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode] =
     # to an imaginary wrapper element.
     # Since `NodeWIthParent` always require a parent, we also add a wrapper-root element.
     let root = (parent: <>"wrapper-root"(<>wrapper(root)), index: 0, elementIndex: 0).NodeWithParent
-    query.execRecursive(root, cmDescendants, single, result)
+    for queryRoot in query.roots:
+        queryRoot.execRecursive(root, cmDescendants, single, result)
 
 proc parseHtmlQuery*(queryString: string): Query =
-    var query: Query = nil
+    let query = Query(roots: @[])
+    var queryRoot: QueryRoot = nil
     var stack = newSeq[Token]()
     var demandStack = newSeq[Demand]()
 
@@ -870,7 +900,7 @@ proc parseHtmlQuery*(queryString: string): Query =
     for idx, token in tokenize(queryString):
         printDebug($token)
         stack.add token
-        reduce(stack, demandStack, query)
+        reduce(stack, demandStack, queryRoot, query)
 
     when DEBUG:
         printDebug("n/a")
@@ -878,12 +908,14 @@ proc parseHtmlQuery*(queryString: string): Query =
     if stack.len > 0:
         raise newException(ParseError, "Unexpected end of input")
 
-    query.append demandStack, cmLeaf
+    queryRoot.append demandStack, cmLeaf
+    query.roots.add queryRoot
 
     when DEBUG:
         echo "\ninput: \n" & queryString
-        echo "\noutput: \n" & $query
+        echo "\noutput: \n" & $queryRoot
         echo repr(query)
+
     return query
 
 proc querySelector*(root: XmlNode, queryString: string): XmlNode =

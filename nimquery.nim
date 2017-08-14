@@ -117,6 +117,9 @@ const combinatorKinds = {
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
+proc indent(str, space: string): string =
+    result = str.replace("\n", "\n" & space)
+
 proc safeCharCompare(str: string, idx: int, cs: set[char]): bool {. inline .} =
     if idx > high(str): return false
     if idx < low(str): return false
@@ -155,8 +158,24 @@ proc `$`(demand: Demand): string =
         result.add " not: " & $demand.notSelector
     of nthKinds:
         result.add " a = " & $demand.a & " b = " & $demand.b
+    of tkElement:
+        result.add " " & demand.element
     else: discard
     result.add "]"
+
+proc `==`(d1, d2: Demand): bool =
+    if d1.kind != d2.kind: return false
+    case d1.kind
+    of attributeKinds:
+        return d1.attrName == d2.attrName and d1.attrValue == d2.attrValue
+    of nthKinds:
+        return d1.a == d2.b
+    of tkPseudoNot:
+        return d1.notSelector == d2.notSelector
+    of tkElement:
+        return d1.element == d2.element
+    else:
+        raise newException(Exception, "Invalid demand kind: " & $d1.kind)
 
 iterator elements(node: XmlNode, offset: NodeWithParent = (nil, -1, -1)): NodeWithParent =
     var idx = offset.index + 1
@@ -204,7 +223,22 @@ proc `$`(q: QueryRoot): string =
     result = q.demands.join(", ") & " " & $q.combinator
 
     if q.nextQuery.len > 0:
-        result.add "\n" & $q.nextQuery
+        result.add "\n\t" & q.nextQuery.join("\n").indent "\t"
+
+proc hasIdenticalDemands(q1, q2: QueryRoot): bool =
+    if q1.demands.len != q2.demands.len:
+        return false
+
+    for d1 in q1.demands:
+        var found = false
+        for d2 in q2.demands:
+            if d1 == d2:
+                found = true
+
+        if not found:
+            return false
+    return true
+
 proc append(q: var QueryRoot, demands: seq[Demand], combinator: Combinator) =
     if q.isNil:
         q = newQueryRoot(demands, combinator)
@@ -226,6 +260,41 @@ proc canFindMultiple(q: QueryRoot, comb: Combinator): bool =
             return false
 
     return true
+
+proc `$`(q: Query): string =
+    result = q.roots.join "\n"
+
+proc optimize(query: Query) =
+    # This implementation is not perfect, but it might be good enough.
+    # It prioritizes merging roots to the start of the root list, 
+    # which is arbitrary (but predictable).
+    # The best optimization is dependent on the structure of HTML
+    # document being queried anyway so I don't think it matters.
+
+    if query.roots.len == 1: return
+
+    var mergeToIdx = 0
+    var mergeFromIdx = 1
+
+    while mergeToIdx < high(query.roots):
+        if hasIdenticalDemands(query.roots[mergeFromIdx], query.roots[mergeToIdx]):
+            
+            var qFrom = query.roots[mergeFromIdx]
+            var qTo = query.roots[mergeToIdx]
+
+            while hasIdenticalDemands(qFrom.nextQuery[0], qTo.nextQuery[0]):
+                qFrom = qFrom.nextQuery[0]
+                qTo = qTo.nextQuery[0]
+
+            qTo.nextQuery.add qFrom.nextQuery
+            query.roots.delete mergeFromIdx
+
+        else:
+            mergeFromIdx.inc
+
+        if mergeFromIdx > high(query.roots):
+            mergeToIdx.inc
+            mergeFromIdx = mergeToIdx + 1
 
 proc isSimpleSelector(q: Query): bool =
     return q.roots.len == 1 and q.roots[0].demands.len == 1 and q.roots[0].nextQuery.len == 0
@@ -652,7 +721,7 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
             var buffer = ""
             readIdentifier(input, idx, buffer)
 
-            if prevToken.isNil or prevToken.kind in combinatorKinds:
+            if prevToken.isNil or prevToken.kind in combinatorKinds + { tkComma }:
                 token = newToken(tkElement, buffer)
             else:
                 token = newToken(tkIdentifier, buffer)
@@ -806,10 +875,6 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
         raise newException(ParseError, "Invalid demand: " & $demand)
 
 proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
-    when DEBUG:
-        echo "\nTesting " & $demands
-        echo "on " & pair.child.shallowToString
-
     for demand in demands:
         if not pair.satisfies(demand):
             return false
@@ -910,11 +975,11 @@ proc parseHtmlQuery*(queryString: string): Query =
 
     queryRoot.append demandStack, cmLeaf
     query.roots.add queryRoot
+    query.optimize
 
     when DEBUG:
         echo "\ninput: \n" & queryString
-        echo "\noutput: \n" & $queryRoot
-        echo repr(query)
+        echo "\nquery: \n" & $query
 
     return query
 

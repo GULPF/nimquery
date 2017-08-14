@@ -162,8 +162,10 @@ const html = """
 
         <div id="test37'"></div>
 
-        <div id="test38-first"></div>
-        <div id="test38-second"></div>
+        <div>
+            <div id="test38-first"></div>
+            <div id="test38-second"></div>
+        </div>
     </body>
 </html>
 """
@@ -462,4 +464,9 @@ suite "nimquery":
 
     test "comma operator":
         var els = xml.querySelectorAll("#test38-first, #test38-second")
+        check(els.len == 2)
+
+    test "comma operator optimizeable":
+        # Use an identical first selector for both comma cases so we trigger optimizations
+        var els = xml.querySelectorAll("div #test38-first, div #test38-second")
         check(els.len == 2)

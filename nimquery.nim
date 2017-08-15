@@ -84,7 +84,10 @@ type
         index, elementIndex: int
 
     Combinator = enum
-        cmChildren, cmDescendants, cmNextSibling, cmSiblings
+        cmDescendants = tkCombinatorDescendents,
+        cmChildren = tkCombinatorChildren,
+        cmNextSibling = tkCombinatorNextSibling,
+        cmSiblings = tkCombinatorSiblings,
         cmLeaf # Special case for the last query
     
     # Because of the comma operator, a query can consist of multiple actual queries.
@@ -98,7 +101,7 @@ type
         # F.ex the query "div p, div a" will generate two queries,
         # but since the left-most subqueries ("div") are identical, they can be merged
         # so that the first subquery is only executed once.
-        nextQuery: seq[QueryRoot]
+        nextQueries: seq[QueryRoot]
         demands: seq[Demand]
         combinator: Combinator
 
@@ -133,22 +136,25 @@ proc child(pair: NodeWithParent): XmlNode =
     return pair.parent[pair.index]
 
 proc newUnexpectedCharacterException(c: char): ref ParseError =
-    return newException(ParseError, "Unexpected character: " & c)
-
-proc newDemand(kind: static[TokenKind]): Demand =
-    return Demand(kind: kind)
+    return newException(ParseError, "Unexpected character: '" & c & "'")
 
 proc newDemand(kind: static[TokenKind], notSelector: Demand): Demand =
     return Demand(kind: kind, notSelector: notSelector)
 
-proc newDemand(kind: static[TokenKind], attrName, attrValue: string): Demand =
-    return Demand(kind: kind, attrName: attrName, attrValue: attrValue)
-
 proc newDemand(kind: static[TokenKind], element: string): Demand =
     return Demand(kind: kind, element: element)
 
-proc newDemand(kind: static[TokenKind], a, b: int): Demand =
-    return Demand(kind: kind, a: a, b: b)
+proc newPseudoDemand(kind: TokenKind): Demand =
+    result = Demand(kind: tkPseudoFirstOfType)
+    result.kind = kind
+
+proc newAttributeDemand(kind: TokenKind, attrName, attrValue: string): Demand =
+    result = Demand(kind: tkAttributeExists, attrName: attrName, attrValue: attrValue)
+    result.kind = kind
+
+proc newPseudoDemand(kind: TokenKind, a, b: int): Demand =
+    result = Demand(kind: tkPseudoNthChild, a: a, b: b)
+    result.kind = kind
 
 proc `$`(demand: Demand): string =
     result = "[" & $demand.kind
@@ -218,13 +224,13 @@ proc `$`(token: Token): string =
         result.add "]"
 
 proc newQueryRoot(demands: seq[Demand], combinator: Combinator): QueryRoot =
-    return QueryRoot(demands: demands, nextQuery: nil, combinator: combinator)
+    return QueryRoot(demands: demands, nextQueries: nil, combinator: combinator)
 
 proc `$`(q: QueryRoot): string =
     result = q.demands.join(", ") & " " & $q.combinator
 
-    if q.nextQuery.len > 0:
-        result.add "\n\t" & q.nextQuery.join("\n").indent "\t"
+    if q.nextQueries.len > 0:
+        result.add "\n\t" & q.nextQueries.join("\n").indent "\t"
 
 proc hasIdenticalDemands(q1, q2: QueryRoot): bool =
     if q1.demands.len != q2.demands.len:
@@ -245,9 +251,9 @@ proc append(q: var QueryRoot, demands: seq[Demand], combinator: Combinator) =
         q = newQueryRoot(demands, combinator)
     else:
         var itr = q
-        while itr.nextQuery.len > 0:
-            itr = itr.nextQuery[0]
-        itr.nextQuery = @[ newQueryRoot(demands, combinator) ]
+        while itr.nextQueries.len > 0:
+            itr = itr.nextQueries[0]
+        itr.nextQueries = @[ newQueryRoot(demands, combinator) ]
 
 proc canFindMultiple(q: QueryRoot, comb: Combinator): bool =
     # Returns true if the current queries demands can be satiesfied by multiple elements.
@@ -269,7 +275,7 @@ proc optimize(query: Query) =
     # This implementation is not perfect, but it might be good enough.
     # It prioritizes merging roots to the start of the root list, 
     # which is arbitrary (but predictable).
-    # The best optimization is dependent on the structure of HTML
+    # The best optimization is dependent on the structure of the HTML
     # document being queried anyway so I don't think it matters.
 
     if query.roots.len == 1: return
@@ -283,11 +289,11 @@ proc optimize(query: Query) =
             var qFrom = query.roots[mergeFromIdx]
             var qTo = query.roots[mergeToIdx]
 
-            while hasIdenticalDemands(qFrom.nextQuery[0], qTo.nextQuery[0]):
-                qFrom = qFrom.nextQuery[0]
-                qTo = qTo.nextQuery[0]
+            while hasIdenticalDemands(qFrom.nextQueries[0], qTo.nextQueries[0]):
+                qFrom = qFrom.nextQueries[0]
+                qTo = qTo.nextQueries[0]
 
-            qTo.nextQuery.add qFrom.nextQuery
+            qTo.nextQueries.add qFrom.nextQueries
             query.roots.delete mergeFromIdx
 
         else:
@@ -298,7 +304,7 @@ proc optimize(query: Query) =
             mergeFromIdx = mergeToIdx + 1
 
 proc isSimpleSelector(q: Query): bool =
-    return q.roots.len == 1 and q.roots[0].demands.len == 1 and q.roots[0].nextQuery.len == 0
+    return q.roots.len == 1 and q.roots[0].demands.len == 1 and q.roots[0].nextQueries.len == 0
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
     while input[idx] in Digits:
@@ -420,7 +426,7 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
                     raise newUnexpectedCharacterException(input[idx])
             else:
                 raise newUnexpectedCharacterException(input[idx])
-
+        
         if a.isNilOrEmpty: a = "0"
         if b.isNilOrEmpty: b = "0"
         # Should be safe to parse
@@ -455,70 +461,6 @@ proc newPseudoToken(str: string): Token =
     else:
         raise newException(ParseError, "Unknown pseudo: " & str)
 
-proc newPseudoDemand(kind: TokenKind): Demand =
-    case kind
-    of tkPseudoFirstOfType:
-        return newDemand(tkPseudoFirstOfType)
-    of tkPseudoLastOfType:
-        return newDemand(tkPseudoLastOfType)
-    of tkPseudoOnlyChild:
-        return newDemand(tkPseudoOnlyChild)
-    of tkPseudoOnlyOfType:
-        return newDemand(tkPseudoOnlyOfType)
-    of tkPseudoEmpty:
-        return newDemand(tkPseudoEmpty)
-    of tkPseudoFirstChild:
-        return newDemand(tkPseudoFirstChild)
-    of tkPseudoLastChild:
-        return newDemand(tkPseudoLastChild)
-    else:
-        raise newException(ParseError, "Unknown pseudo: " & $kind)
-
-proc newAttributeDemand(kind: TokenKind, attrName, attrValue: string): Demand =
-    case kind
-    of tkAttributeExists:
-        return newDemand(tkAttributeExists, attrName, attrValue)
-    of tkAttributeEnd:
-        return newDemand(tkAttributeEnd, attrName, attrValue)
-    of tkAttributeExact:
-        return newDemand(tkAttributeExact, attrName, attrValue)
-    of tkAttributeItem:
-        return newDemand(tkAttributeItem, attrName, attrValue)
-    of tkAttributePipe:
-        return newDemand(tkAttributePipe, attrName, attrValue)
-    of tkAttributeStart:
-        return newDemand(tkAttributeStart, attrName, attrValue)
-    of tkAttributeSubstring:
-        return newDemand(tkAttributeSubstring, attrName, attrValue)
-    else:
-        raise newException(ParseError, "Unknown attribute kind: " & $kind)
-
-proc newPseudoDemand(kind: TokenKind, a, b: int): Demand =
-    case kind
-    of tkPseudoNthChild:
-        return newDemand(tkPseudoNthChild, a, b)
-    of tkPseudoNthLastChild:
-        return newDemand(tkPseudoNthLastChild, a, b)
-    of tkPseudoNthOfType:
-        return newDemand(tkPseudoNthOfType, a, b)
-    of tkPseudoNthLastOfType:
-        return newDemand(tkPseudoNthLastOfType, a, b)
-    else:
-        raise newException(ParseError, "Unknown pseudo: " & $kind)
-
-proc getCombinator(kind: TokenKind): Combinator =
-    case kind:
-    of tkCombinatorChildren:
-        return cmChildren
-    of tkCombinatorDescendents:
-        return cmDescendants
-    of tkCombinatorNextSibling:
-        return cmNextSibling
-    of tkCombinatorSiblings:
-        return cmSiblings
-    else:
-        raise newException(ParseError, "Unknown combinator: " & $kind)
-
 proc parseHtmlQuery*(queryString: string): Query # Forward declare for usage in `reduce`
 proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var QueryRoot, query: Query) =
     if stack.len == 0:
@@ -531,12 +473,12 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
 
     of tkIdentifier:
         if stack[^2].kind == tkClass:
-            let demand = newDemand(tkAttributeItem, "class", prev.value)
+            let demand = newAttributeDemand(tkAttributeItem, "class", prev.value)
             demandStack.add demand
             stack.setLen stack.len - 2
 
         elif stack[^2].kind == tkId:
-            let demand = newDemand(tkAttributeExact, "id", prev.value)
+            let demand = newAttributeDemand(tkAttributeExact, "id", prev.value)
             demandStack.add demand
             stack.setLen stack.len - 2
 
@@ -552,7 +494,7 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
             stack.setLen stack.len - 5
 
         else:
-            let demand = newDemand(tkAttributeExists,stack[^2].value, "")
+            let demand = newAttributeDemand(tkAttributeExists, stack[^2].value, "")
             demandStack.add demand
             stack.setLen stack.len - 3
 
@@ -597,7 +539,7 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
             raise newException(ParseError,
                 "Invalid parser state. Expected stack length to be 1. Stack: " & repr(stack))
 
-        let combinator = getCombinator(prev.kind)
+        let combinator = prev.kind.Combinator
         queryRoot.append demandStack, combinator
         stack = @[]
         demandStack = @[]
@@ -920,10 +862,10 @@ proc execRecursive(queryRoot: QueryRoot, root: NodeWithParent, combinator: Combi
 
     template search(itr: iterator(q: QueryRoot, p: NodeWithParent): NodeWithParent {. inline .}): typed =
         for next in itr(queryRoot, position):
-            if queryRoot.nextQuery.len == 0:
+            if queryRoot.nextQueries.len == 0:
                 output.add next.child
             else:
-                for subquery in queryRoot.nextQuery:
+                for subquery in queryRoot.nextQueries:
                     subquery.execRecursive(next, queryRoot.combinator, single, output)
 
             if not queryRoot.canFindMultiple(combinator): break

@@ -8,6 +8,7 @@ import xmltree
 import strutils
 import strtabs
 import unicode
+import math
 
 const DEBUG = false
 
@@ -376,14 +377,14 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
     elif input == "even":
         return (2, 0)
     else:
-        var done = false
         var idx = 0
         var a = ""
         var b = ""
+        var buffer = ""
 
         # NOTE: Spacing between first sign and `a` is not allowed.
         while idx < input.len:
-            var buffer = ""
+            
             var allowSpace = true
 
             case input[idx]
@@ -400,15 +401,17 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
                         raise newUnexpectedCharacterException(input[idx])
                     a = buffer
                     idx.inc
-                    allowSpace = true
                 else:
                     b = buffer
-                    done = true
+                buffer.setLen 0
+                allowSpace = true
             of 'n':
                 if not a.isNilOrEmpty:
                     raise newUnexpectedCharacterException(input[idx])
-                a = "1"
+                buffer.add "1"
+                a = buffer
                 idx.inc
+                buffer.setLen 0
                 allowSpace = true
             of ' ':
                 if allowSpace:
@@ -418,9 +421,6 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
             else:
                 raise newUnexpectedCharacterException(input[idx])
 
-        if not input[idx .. ^1].strip.isNilOrEmpty:
-            raise newUnexpectedCharacterException(input[idx .. ^1].strip[0])
-        
         if a.isNilOrEmpty: a = "0"
         if b.isNilOrEmpty: b = "0"
         # Should be safe to parse
@@ -769,7 +769,8 @@ proc hasAttr(node: XmlNode, attr: string): bool {. inline .} =
 proc validateNth(a, b, nSiblings: int): bool = 
     if a == 0:
         return nSiblings == b - 1
-    return (nSiblings - (b - 1)) mod a == 0
+    let n = (nSiblings - (b - 1)) / a
+    return n.floor == n and n >= 0
 
 proc satisfies(pair: NodeWithParent, demand: Demand): bool =
     let node = pair.child

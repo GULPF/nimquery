@@ -435,6 +435,12 @@ suite "nimquery":
             let els = xml.querySelectorAll(query)
             check(els.len == 3)
 
+    test "pseudo :nth-child negative a":
+        var els = xml.querySelectorAll(".test36:nth-child(-n + 1)")
+        check(els.len == 1)
+        els = xml.querySelectorAll(".test36:nth-child(-2n + 7)")
+        check(els.len == 2)
+
     test "escaping strings":
         var queries = [
             r"[id = 'test37\'']",

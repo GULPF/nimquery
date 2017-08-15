@@ -1,5 +1,22 @@
 # nimquery
-A library for querying HTML using CSS-selectors, like JavaScripts `document.querySelector`.
+A library for querying HTML using CSS selectors, like JavaScripts `document.querySelector`.
+
+Supports all combinators, the comma operator and all [CSS3 selectors](https://www.w3.org/TR/css3-selectors) except the following (most of which have no meaning in a headless context):
+- :root
+- :link
+- :visited
+- :active
+- :hover
+- :focus
+- :target
+- :lang(fr)
+- :enabled
+- :disabled
+- :checked
+- ::first-line 
+- ::first-letter
+- ::before
+- ::after 
 
 ## Usage
 ```nim
@@ -18,7 +35,7 @@ let html = """
       <p>4</p>
     </body>
   </html>
-  """
+"""
 let xml = parseHtml(newStringStream(html))
 let elements = xml.querySelectorAll("p:nth-child(odd)")
 echo elements

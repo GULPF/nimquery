@@ -23,6 +23,7 @@ Supports all combinators, the comma operator and all [CSS3 selectors](https://ww
 import xmltree
 import htmlparser
 import streams
+import nimquery
 
 let html = """
 <!DOCTYPE html>
@@ -47,21 +48,24 @@ echo elements
 ```nim
 proc querySelectorAll*(queryString: string): seq[XmlNode]
 ```
-Get all elements matching `queryString`.
+Get all elements matching `queryString`.  
+Raises `ParseError` if parsing of `queryString` fails.
 
 - - -
 
 ```nim
 proc querySelector*(queryString: string): XmlNode
 ```
-Get the first element matching `queryString`, or `nil` if no such element exists.
+Get the first element matching `queryString`, or `nil` if no such element exists.  
+Raises `ParseError` if parsing of `queryString` fails.
 
 - - -
 
 ```nim
 proc parseHtmlQuery*(queryString: string): Query
 ```
-Parses a query for later use.
+Parses a query for later use.  
+Raises `ParseError` if parsing of `queryString` fails.
 
 - - -
 

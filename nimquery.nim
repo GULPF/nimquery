@@ -1,9 +1,14 @@
 # Spec: https://www.w3.org/TR/css3-selectors/
 
 # TODO:
-#  - Some selectors are unique in the context of siblings. I can use this for optimizations.
-#  - There are some very specific optmization which might be worth it.
-#    E.g :only-child can disqualify all siblings at once.
+#  - Implement `iterator matches(XmlNode, Query)` - like find all but lazy
+#  - Implement some engine options. Preferably as a argument to parse/exec functions.
+#    Examples:
+#       - Allow/disallow duplicate id's (currently always disallows)
+#       - Allow/disallow complex :not expressions
+#       - Allow/disallow non-ascii in identifiers
+
+
 import xmltree
 import strutils
 import strtabs
@@ -93,6 +98,7 @@ type
     # Because of the comma operator, a query can consist of multiple complete queries.
     Query* = ref object
         roots: seq[PartialQuery]
+        options: Options
     
     PartialQuery = ref object
         # `nextQueries` will never contain more than one element while parsing.
@@ -102,6 +108,20 @@ type
         demands: seq[Demand]
         # Indicates what type of search should be used for `nextQueries`.
         combinator: Combinator
+
+    SearchContext[single: static[bool]] = object
+        options: Options
+        position: NodeWithParent
+        combinator: Combinator
+
+    Options* = object
+        # Assume unique id's or not
+        uniqueIds: bool
+        # Allow non-ascii in identifiers (e.g `#exämple`)
+        asciiIdentifiers: bool
+        # Disallow more complex :not selectors. Annoying but that's the spec.
+        # Combinators/comma are not allowed even if true.        
+        simpleNot: bool
 
 const beginingIdentifiers = Letters + { '-', '\\' }
 const identifiers = Letters + Digits + { '-', '_', '\\' }
@@ -122,6 +142,11 @@ const combinatorKinds = {
 template log(msg: string): typed =
     when DEBUG:
         echo msg
+
+proc defaultOptions(): Options =
+    result.uniqueIds = true
+    result.asciiIdentifiers = true
+    result.simpleNot = true
 
 proc indent(str, space: string): string =
     result = str.replace("\n", "\n" & space)
@@ -145,7 +170,7 @@ proc `$`(comb: Combinator): string =
     of cmChildren: return " > "
     of cmLeaf: return ""
 
-proc attrComparer(kind: TokenKind): string =
+proc attrComparerString(kind: TokenKind): string =
     case kind
     of tkAttributeExact: return "="
     of tkAttributeItem: return "~="
@@ -183,7 +208,7 @@ proc `$`(demand: Demand): string =
         if demand.kind == tkAttributeExists:
             result = "[" & demand.attrName & "]"
         else:
-            result = "[" & demand.attrName & demand.kind.attrComparer & "'" & demand.attrValue & "']"
+            result = "[" & demand.attrName & demand.kind.attrComparerString & "'" & demand.attrValue & "']"
     of tkPseudoNot:
         result = ":" & $demand.kind & "(" & $demand.notSelector & ")"
     of nthKinds:
@@ -364,6 +389,13 @@ proc optimize(query: Query) =
 
 proc isSimpleSelector(q: Query): bool =
     return q.roots.len == 1 and q.roots[0].demands.len == 1 and q.roots[0].nextQueries.len == 0
+
+proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: static[bool], opts: Options): SearchContext[single] =
+    SearchContext[single](position: pos, combinator: comb, options: opts)
+
+# Create the next context state, going forward in the search
+proc forward[single: static[bool]](ctx: SearchContext[single], pos: NodeWithParent, comb: Combinator): SearchContext[single] =
+    SearchContext[single](position: pos, combinator: comb, options: ctx.options)
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
     while input[idx] in Digits:
@@ -915,10 +947,9 @@ iterator searchNextSibling(queryRoot: PartialQuery, position: NodeWithParent): N
             yield pair
         break # by definition, there can only be one next sibling
 
-proc execRecursive(queryRoot: PartialQuery, root: NodeWithParent, combinator: Combinator,
-        single: static[bool], output: var seq[XmlNode]) =
+proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var seq[XmlNode]) =
     
-    var position = root
+    var position = context.position
 
     template search(itr: iterator(q: PartialQuery, p: NodeWithParent): NodeWithParent {. inline .}): typed =
         for next in itr(queryRoot, position):
@@ -926,14 +957,15 @@ proc execRecursive(queryRoot: PartialQuery, root: NodeWithParent, combinator: Co
                 output.add next.child
             else:
                 for subquery in queryRoot.nextQueries:
-                    subquery.execRecursive(next, queryRoot.combinator, single, output)
+                    let nextContext = context.forward(next, queryRoot.combinator)
+                    subquery.execRecursive(nextContext, output)
 
-            if not queryRoot.canFindMultiple(combinator): break
-            when single:
+            if not queryRoot.canFindMultiple(context.combinator): break
+            when context.single:
                 if output.len > 0:
                     break
 
-    case combinator
+    case context.combinator
     of cmDescendants: search(searchDescendants)
     of cmChildren:    search(searchChildren)
     of cmSiblings:    search(searchSiblings)
@@ -950,9 +982,10 @@ proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode] =
     # Since `NodeWIthParent` always require a parent, we also add a wrapper-root element.
     let root = (parent: <>"wrapper-root"(<>wrapper(root)), index: 0, elementIndex: 0).NodeWithParent
     for queryRoot in query.roots:
-        queryRoot.execRecursive(root, cmDescendants, single, result)
+        let context = initSearchContext(root, cmDescendants, single, query.options)
+        queryRoot.execRecursive(context, result)
 
-proc parseHtmlQuery*(queryString: string): Query =
+proc parseHtmlQuery*(queryString: string, options: Options): Query =
     let query = Query(roots: @[])
     var queryRoot: PartialQuery = nil
     var stack = newSeq[Token]()
@@ -969,7 +1002,6 @@ proc parseHtmlQuery*(queryString: string): Query =
         stack.add token
         reduce(stack, demandStack, queryRoot, query)
 
-    
     printDebug("n/a")
 
     if stack.len > 0:
@@ -978,11 +1010,15 @@ proc parseHtmlQuery*(queryString: string): Query =
     queryRoot.append demandStack, cmLeaf
     query.roots.add queryRoot
     query.optimize
+    query.options = options
 
     log "\ninput: \n" & queryString
     log "\nquery: \n" & query.debugToString
 
     return query
+
+proc parseHtmlQuery*(queryString: string): Query =
+    parseHtmlQuery(queryString, defaultOptions())
 
 proc querySelector*(root: XmlNode, queryString: string): XmlNode =
     let query = parseHtmlQuery(queryString)

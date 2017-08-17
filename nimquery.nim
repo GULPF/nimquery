@@ -90,19 +90,17 @@ type
         cmSiblings = tkCombinatorSiblings,
         cmLeaf # Special case for the last query
     
-    # Because of the comma operator, a query can consist of multiple actual queries.
+    # Because of the comma operator, a query can consist of multiple complete queries.
     Query* = ref object
-        roots: seq[QueryRoot]
-
-    QueryRoot = ref object
-        # Will never contain more than one element while parsing.
-        # When optmizing comma queries, partialy identical queries are merged
-        # and stored as a seq.
-        # F.ex the query "div p, div a" will generate two queries,
-        # but since the left-most subqueries ("div") are identical, they can be merged
-        # so that the first subquery is only executed once.
-        nextQueries: seq[QueryRoot]
+        roots: seq[PartialQuery]
+    
+    PartialQuery = ref object
+        # `nextQueries` will never contain more than one element while parsing.
+        # It's used in `optimize(q: Query)` to partialy merge similiar queries.
+        nextQueries: seq[PartialQuery]
+        # Elements which satiesfies these demands are matched by the query.
         demands: seq[Demand]
+        # Indicates what type of search should be used for `nextQueries`.
         combinator: Combinator
 
 const beginingIdentifiers = Letters + { '-', '\\' }
@@ -121,6 +119,10 @@ const combinatorKinds = {
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
+template log(msg: string): typed =
+    when DEBUG:
+        echo msg
+
 proc indent(str, space: string): string =
     result = str.replace("\n", "\n" & space)
 
@@ -134,6 +136,25 @@ proc safeCharCompare(str: string, idx: int, c: char): bool {. inline .} =
 
 proc child(pair: NodeWithParent): XmlNode =
     return pair.parent[pair.index]
+
+proc `$`(comb: Combinator): string =
+    case comb
+    of cmDescendants: return " "
+    of cmNextSibling: return " + "
+    of cmSiblings: return " ~ "
+    of cmChildren: return " > "
+    of cmLeaf: return ""
+
+proc attrComparer(kind: TokenKind): string =
+    case kind
+    of tkAttributeExact: return "="
+    of tkAttributeItem: return "~="
+    of tkAttributePipe: return "|="
+    of tkAttributeExists: return ""
+    of tkAttributeStart: return "^="
+    of tkAttributeEnd: return "$="
+    of tkAttributeSubstring: return "*="
+    else: raise newException(Exception, "Invalid attr kind: " & $kind)
 
 proc newUnexpectedCharacterException(c: char): ref ParseError =
     return newException(ParseError, "Unexpected character: '" & c & "'")
@@ -157,18 +178,22 @@ proc newPseudoDemand(kind: TokenKind, a, b: int): Demand =
     result.kind = kind
 
 proc `$`(demand: Demand): string =
-    result = "[" & $demand.kind
     case demand.kind:
     of attributeKinds:
-        result.add " " & demand.attrName & "=" & demand.attrValue
+        if demand.kind == tkAttributeExists:
+            result = "[" & demand.attrName & "]"
+        else:
+            result = "[" & demand.attrName & demand.kind.attrComparer & "'" & demand.attrValue & "']"
     of tkPseudoNot:
-        result.add " not: " & $demand.notSelector
+        result = ":" & $demand.kind & "(" & $demand.notSelector & ")"
     of nthKinds:
-        result.add " a = " & $demand.a & " b = " & $demand.b
+        result =  ":" & $demand.kind & "(" & $demand.a & "n, " & $demand.b & ")"
+    of pseudoNoParamsKinds:
+        result  = ":" & $demand.kind
     of tkElement:
-        result.add " " & demand.element
-    else: discard
-    result.add "]"
+        result = demand.element
+    else:
+        result = $demand.kind
 
 proc `==`(d1, d2: Demand): bool =
     if d1.kind != d2.kind: return false
@@ -194,22 +219,6 @@ iterator elements(node: XmlNode, offset: NodeWithParent = (nil, -1, -1)): NodeWi
             elIdx.inc
         idx.inc
 
-proc shallowToString(node: XmlNode): string =
-    # Print a single element instead of the entire tree
-    if node.isNil:
-        return "nil"
-
-    var attrs = newSeq[string]()
-
-    if not node.attrs.isNil:
-        for attrName, attrValue in node.attrs:
-            attrs.add attrName & "=\"" & attrValue & "\""
-
-    result = "<" & node.tag
-    if attrs.len > 0:
-        result.add " " & attrs.join(" ")
-    result.add " />"
-
 proc newToken(kind: static[TokenKind], value: string = ""): Token =
     return Token(kind: kind, value: value)
 
@@ -223,16 +232,54 @@ proc `$`(token: Token): string =
     else:
         result.add "]"
 
-proc newQueryRoot(demands: seq[Demand], combinator: Combinator): QueryRoot =
-    return QueryRoot(demands: demands, nextQueries: nil, combinator: combinator)
+proc newPartialQuery(demands: seq[Demand], combinator: Combinator): PartialQuery =
+    return PartialQuery(demands: demands, nextQueries: nil, combinator: combinator)
 
-proc `$`(q: QueryRoot): string =
-    result = q.demands.join(", ") & " " & $q.combinator
+proc debugToString(q: PartialQuery): string =
+    result = ""
+
+    for idx, d in q.demands:
+        result.add "[" & $d.kind & " " & $d & "]"
+        if idx != high(q.demands):
+            result.add ", "
+
+    # result = q.demands.join(", ") & " " & $q.combinator
 
     if q.nextQueries.len > 0:
-        result.add "\n\t" & q.nextQueries.join("\n").indent "\t"
+        result.add "\n\t"
+        
+        var joined = ""
+        for idx, part in q.nextQueries:
+            joined.add part.debugToString
+            if idx != high(q.nextQueries):
+                joined.add "\n"
+        result.add joined.indent "\t"
+        #q.nextQueries.join("\n").indent "\t"
 
-proc hasIdenticalDemands(q1, q2: QueryRoot): bool =
+proc rootStrings(q: PartialQuery): seq[string] =
+    var common = ""
+    var current = q
+    
+    common.add current.demands.join("")
+    common.add $current.combinator
+
+    while current.nextQueries.len == 1:
+        current = current.nextQueries[0]
+        common.add current.demands.join("")
+        common.add $current.combinator
+
+    if current.nextQueries.len > 1:
+        result = @[]
+        for part in current.nextQueries:
+            for str in part.rootStrings:
+                result.add common & str
+    else:
+        result = @[common]
+
+proc `$`(q: PartialQuery): string =
+    q.rootStrings.join ", "
+
+proc hasIdenticalDemands(q1, q2: PartialQuery): bool =
     if q1.demands.len != q2.demands.len:
         return false
 
@@ -246,17 +293,17 @@ proc hasIdenticalDemands(q1, q2: QueryRoot): bool =
             return false
     return true
 
-proc append(q: var QueryRoot, demands: seq[Demand], combinator: Combinator) =
+proc append(q: var PartialQuery, demands: seq[Demand], combinator: Combinator) =
     if q.isNil:
-        q = newQueryRoot(demands, combinator)
+        q = newPartialQuery(demands, combinator)
     else:
         var itr = q
         while itr.nextQueries.len > 0:
             itr = itr.nextQueries[0]
-        itr.nextQueries = @[ newQueryRoot(demands, combinator) ]
+        itr.nextQueries = @[ newPartialQuery(demands, combinator) ]
 
-proc canFindMultiple(q: QueryRoot, comb: Combinator): bool =
-    # Returns true if the current queries demands can be satiesfied by multiple elements.
+proc canFindMultiple(q: PartialQuery, comb: Combinator): bool = 
+    # Returns true if the current queries demands can be satisfied by multiple elements.
     # This is used to check if the search should stop after the first element has been found.
     for demand in q.demands:
         if demand.kind in attributeKinds and demand.attrName == "id":
@@ -268,10 +315,22 @@ proc canFindMultiple(q: QueryRoot, comb: Combinator): bool =
 
     return true
 
-proc `$`(q: Query): string =
+proc `$`*(q: Query): string =
     result = q.roots.join "\n"
 
+proc debugToString(q: Query): string =
+    result = ""
+    for idx, root in q.roots:
+        result.add root.debugToString
+        if idx != high(q.roots):
+            result.add "\n"
+
 proc optimize(query: Query) =
+    # Optimizes similiar looking root queries (created with the comma operator)
+    # by partially merging them. This way, the common part of the qoot queries
+    # only has to be searched for once.
+    # E.g in the query `div p, div a` all div elements only needs to be found once.
+    #
     # This implementation is not perfect, but it might be good enough.
     # It prioritizes merging roots to the start of the root list, 
     # which is arbitrary (but predictable).
@@ -462,7 +521,7 @@ proc newPseudoToken(str: string): Token =
         raise newException(ParseError, "Unknown pseudo: " & str)
 
 proc parseHtmlQuery*(queryString: string): Query # Forward declare for usage in `reduce`
-proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var QueryRoot, query: Query) =
+proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var PartialQuery, query: Query) =
     if stack.len == 0:
         return
 
@@ -518,10 +577,10 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
                 raise newException(ParseError,
                     ":not argument must be a simple selector. Was: " & repr(notQuery))
             
-            var notQueryRoot = notQuery.roots[0]
+            var notPartialQuery = notQuery.roots[0]
 
             # Safe because we know it's a simple selector
-            let demand = newDemand(tkPseudoNot, notQueryRoot.demands[0])
+            let demand = newDemand(tkPseudoNot, notPartialQuery.demands[0])
             demandStack.add demand
             stack.setLen stack.len - 2
 
@@ -556,6 +615,8 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
     else: discard
 
 proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
+    # Checks if the last two tokens represents the end of a simple selector. 
+    # This is needed to determine if a space is significant or not.
     if prev.isNil:
         return false
     if prev.kind in { tkBracketEnd, tkParam, tkElement } + pseudoNoParamsKinds:
@@ -576,8 +637,7 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
     while idx < input.len:
         let ch = input[idx]
         var token: Token
-        when DEBUG:
-            echo "char: '" & ch & "'"
+        log "char: '" & ch & "'"
 
         case ch:
 
@@ -824,7 +884,7 @@ proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
 
     return true
 
-iterator searchDescendants(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent =
+iterator searchDescendants(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
     var queue = newSeq[NodeWithParent]()
     for nodeData in position.child.elements:
         queue.add((parent: position.child, index: nodeData.index, elementIndex: nodeData.elementIndex))
@@ -836,17 +896,17 @@ iterator searchDescendants(queryRoot: QueryRoot, position: NodeWithParent): Node
         for nodeData in pair.child.elements:
             queue.insert((parent: pair.child, index: nodeData.index, elementIndex: nodeData.elementIndex), 0)
 
-iterator searchChildren(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent =
+iterator searchChildren(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
     for pair in position.child.elements:
         if pair.satisfies queryRoot.demands:
             yield pair
 
-iterator searchSiblings(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent = 
+iterator searchSiblings(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent = 
     for pair in position.parent.elements:
         if pair.child != position.child and pair.satisfies queryRoot.demands:
             yield pair
 
-iterator searchNextSibling(queryRoot: QueryRoot, position: NodeWithParent): NodeWithParent =
+iterator searchNextSibling(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
     # It's a bit silly to have an iterator which will only yield 0 or 1 element,
     # but it's nice for consistency with how the other combinators are implemented.
     
@@ -855,12 +915,12 @@ iterator searchNextSibling(queryRoot: QueryRoot, position: NodeWithParent): Node
             yield pair
         break # by definition, there can only be one next sibling
 
-proc execRecursive(queryRoot: QueryRoot, root: NodeWithParent, combinator: Combinator,
+proc execRecursive(queryRoot: PartialQuery, root: NodeWithParent, combinator: Combinator,
         single: static[bool], output: var seq[XmlNode]) =
     
     var position = root
 
-    template search(itr: iterator(q: QueryRoot, p: NodeWithParent): NodeWithParent {. inline .}): typed =
+    template search(itr: iterator(q: PartialQuery, p: NodeWithParent): NodeWithParent {. inline .}): typed =
         for next in itr(queryRoot, position):
             if queryRoot.nextQueries.len == 0:
                 output.add next.child
@@ -894,24 +954,23 @@ proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode] =
 
 proc parseHtmlQuery*(queryString: string): Query =
     let query = Query(roots: @[])
-    var queryRoot: QueryRoot = nil
+    var queryRoot: PartialQuery = nil
     var stack = newSeq[Token]()
     var demandStack = newSeq[Demand]()
 
     template printDebug(token: string) =
-        when DEBUG:
-            echo "token: " & $token
-            echo "stack: " & $stack
-            echo "demands: " & $demandStack
-            echo "* * *"
+        log "token: " & $token
+        log "stack: " & $stack
+        log "demands: " & $demandStack
+        log "* * *"
 
     for idx, token in tokenize(queryString):
         printDebug($token)
         stack.add token
         reduce(stack, demandStack, queryRoot, query)
 
-    when DEBUG:
-        printDebug("n/a")
+    
+    printDebug("n/a")
 
     if stack.len > 0:
         raise newException(ParseError, "Unexpected end of input")
@@ -920,9 +979,8 @@ proc parseHtmlQuery*(queryString: string): Query =
     query.roots.add queryRoot
     query.optimize
 
-    when DEBUG:
-        echo "\ninput: \n" & queryString
-        echo "\nquery: \n" & $query
+    log "\ninput: \n" & queryString
+    log "\nquery: \n" & query.debugToString
 
     return query
 

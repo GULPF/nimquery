@@ -476,3 +476,10 @@ suite "nimquery":
         # Use an identical first selector for both comma cases so we trigger optimizations
         var els = xml.querySelectorAll("div #test38-first, div #test38-second")
         check(els.len == 2)
+
+    test "Query $":
+        var qStr = $(parseHtmlQuery("div#foobar"))
+        check(qStr == "div[id='foobar']")
+
+        qStr = $(parseHtmlQuery("div > a, div > p"))
+        check(qStr == "div > a, div > p")

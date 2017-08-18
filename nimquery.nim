@@ -310,8 +310,8 @@ proc rootStrings(q: PartialQuery): seq[string] =
 proc `$`(q: PartialQuery): string =
     q.rootStrings.join ", "
 
-proc hasIdenticalDemands(q1, q2: PartialQuery): bool =
-    if q1.demands.len != q2.demands.len:
+proc isIdenticalRoot(q1, q2: PartialQuery): bool =
+    if q1.demands.len != q2.demands.len or q1.combinator != q2.combinator:
         return false
 
     for d1 in q1.demands:
@@ -322,6 +322,7 @@ proc hasIdenticalDemands(q1, q2: PartialQuery): bool =
 
         if not found:
             return false
+
     return true
 
 proc append(q: var PartialQuery, demands: seq[Demand], combinator: Combinator) =
@@ -367,6 +368,11 @@ proc optimize(query: Query) =
     # which is arbitrary (but predictable).
     # The best optimization is dependent on the structure of the HTML
     # document being queried anyway so I don't think it matters.
+    #
+    # It doesn't optimize partials with different combinators,
+    # e.g `div > p, div a` isn't optimized.
+    # This might be easy enough to fix that it's worth it,
+    # but it's a rare enough case that I don't care for now.
 
     if query.roots.len == 1: return
 
@@ -374,12 +380,12 @@ proc optimize(query: Query) =
     var mergeFromIdx = 1
 
     while mergeToIdx < high(query.roots):
-        if hasIdenticalDemands(query.roots[mergeFromIdx], query.roots[mergeToIdx]):
+        if isIdenticalRoot(query.roots[mergeFromIdx], query.roots[mergeToIdx]):
             
             var qFrom = query.roots[mergeFromIdx]
             var qTo = query.roots[mergeToIdx]
 
-            while hasIdenticalDemands(qFrom.nextQueries[0], qTo.nextQueries[0]):
+            while isIdenticalRoot(qFrom.nextQueries[0], qTo.nextQueries[0]):
                 qFrom = qFrom.nextQueries[0]
                 qTo = qTo.nextQueries[0]
 

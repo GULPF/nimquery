@@ -170,6 +170,12 @@ const html = """
         <div id="test39">
             <div id="exämple"></div>
         </div>
+
+        <div id="test40">
+            <div>
+                <span></span>
+            </div>
+        </div>
     </body>
 </html>
 """
@@ -490,3 +496,7 @@ suite "nimquery":
     test "Non-ascii identifier":
         var els = xml.querySelectorAll("#test39 #exämple")
         check(els.len == 1)
+
+    test "Issue with optimization of roots with different combinators":
+        var els = xml.querySelectorAll("#test40 > div, #test40 span")
+        check(els.len == 2)

@@ -7,8 +7,9 @@
 #       - Allow/disallow duplicate id's (currently always disallows)
 #       - Allow/disallow complex :not expressions
 #       - Allow/disallow non-ascii in identifiers
-#  - Is `optimize` bugged when using different combinators? probably
-
+#       - Allow/disallow some level 4 selectors
+#  - If I change PartialQuery.Combinator to indicate combinator of PartialQuery,
+#    it will simplify a lot of things, including making the comma optimizations better.
 
 import xmltree
 import strutils
@@ -115,16 +116,11 @@ type
         position: NodeWithParent
         combinator: Combinator
 
-    ParseContext = object
-        options: Options
-        query: Query
-        currentRoot: PartialQuery
-
     Options* = object
         # Assume unique id's or not
         uniqueIds: bool
         # Allow non-ascii in identifiers (e.g `#exämple`)
-        asciiIdentifiers: bool
+        unicodeIdentifiers: bool
         # Disallow more complex :not selectors. Annoying but that's the spec.
         # Combinators/comma are not allowed even if true.        
         simpleNot: bool
@@ -151,7 +147,7 @@ template log(msg: string): typed =
 
 proc defaultOptions(): Options =
     result.uniqueIds = true
-    result.asciiIdentifiers = true
+    result.unicodeIdentifiers = true
     result.simpleNot = true
 
 proc indent(str, space: string): string =
@@ -334,11 +330,11 @@ proc append(q: var PartialQuery, demands: seq[Demand], combinator: Combinator) =
             itr = itr.nextQueries[0]
         itr.nextQueries = @[ newPartialQuery(demands, combinator) ]
 
-proc canFindMultiple(q: PartialQuery, comb: Combinator): bool = 
+proc canFindMultiple(q: PartialQuery, comb: Combinator, options: Options): bool = 
     # Returns true if the current queries demands can be satisfied by multiple elements.
     # This is used to check if the search should stop after the first element has been found.
     for demand in q.demands:
-        if demand.kind in attributeKinds and demand.attrName == "id":
+        if options.uniqueIds and demand.kind in attributeKinds and demand.attrName == "id":
             return false
         if comb in { cmChildren, cmSiblings } and demand.kind in
                 { tkPseudoFirstOfType, tkPseudoLastOfType,
@@ -399,8 +395,11 @@ proc optimize(query: Query) =
             mergeToIdx.inc
             mergeFromIdx = mergeToIdx + 1
 
-proc isSimpleSelector(q: Query): bool =
-    return q.roots.len == 1 and q.roots[0].demands.len == 1 and q.roots[0].nextQueries.len == 0
+proc isValidNotQuery(q: Query, options: Options): bool =
+    return
+        q.roots.len == 1 and
+        q.roots[0].nextQueries.len == 0 and
+        (q.roots[0].demands.len == 1 or not options.simpleNot)
 
 proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: static[bool], opts: Options): SearchContext[single] =
     SearchContext[single](position: pos, combinator: comb, options: opts)
@@ -468,7 +467,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
         # Spec: https://www.w3.org/TR/CSS21/syndata.html#value-def-identifier
         return rune >=% 160.Rune
 
-    while true:
+    while idx < input.len:
         # NOTE: `idx` is the byte offset of input, so `runeAt(idx)` is correct.
         let rune = input.runeAt(idx)
 
@@ -482,8 +481,16 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
             idx.inc unicodeCh.len
             buffer.add unicodeCh
 
-        if idx > high(input):
-            break
+proc readIdentifierAscii(input: string; idx: var int, buffer: var string) =
+    if input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits):
+        raise newUnexpectedCharacterException(input[idx + 1])
+
+    while input[idx] in identifiers and idx < input.len:
+        if input[idx] == '\\':
+            readEscape(input, idx, buffer)
+        else:
+            buffer.add input[idx]
+            idx.inc
 
 proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
     let input = raw.strip
@@ -570,8 +577,8 @@ proc newPseudoToken(str: string): Token =
     else:
         raise newException(ParseError, "Unknown pseudo: " & str)
 
-proc parseHtmlQuery*(queryString: string): Query # Forward declare for usage in `reduce`
-proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var PartialQuery, query: Query) =
+proc parseHtmlQuery*(queryString: string, options: Options): Query # Forward declare for usage in `reduce`
+proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var PartialQuery, query: Query, options: Options) =
     if stack.len == 0:
         return
 
@@ -586,33 +593,33 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
 
         elif stack[^2].kind == tkClass:
             let demand = newAttributeDemand(tkAttributeItem, "class", prev.value)
-            demandStack.add demand
+            demandBuffer.add demand
             stack.setLen stack.len - 2
 
         elif stack[^2].kind == tkId:
             let demand = newAttributeDemand(tkAttributeExact, "id", prev.value)
-            demandStack.add demand
+            demandBuffer.add demand
             stack.setLen stack.len - 2
 
     of tkElement:
         let demand = newDemand(tkElement, prev.value)
-        demandStack.add demand
+        demandBuffer.add demand
         stack.setLen stack.len - 1
 
     of tkBracketEnd:
         if stack[^3].kind in attributeKinds - { tkAttributeExists }:
             let demand = newAttributeDemand(stack[^3].kind, stack[^4].value, stack[^2].value)
-            demandStack.add demand
+            demandBuffer.add demand
             stack.setLen stack.len - 5
 
         else:
             let demand = newAttributeDemand(tkAttributeExists, stack[^2].value, "")
-            demandStack.add demand
+            demandBuffer.add demand
             stack.setLen stack.len - 3
 
     of pseudoNoParamsKinds:
         let demand = newPseudoDemand(prev.kind)
-        demandStack.add demand
+        demandBuffer.add demand
         stack.setLen stack.len - 1
 
     of tkParam:
@@ -624,9 +631,9 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
 
         of tkPseudoNot:
             # Not the cleanest way to this, but eh
-            let notQuery = parseHtmlQuery(prev.value)
+            let notQuery = parseHtmlQuery(prev.value, options)
 
-            if not notQuery.isSimpleSelector:
+            if not notQuery.isValidNotQuery(options):
                 raise newException(ParseError,
                     ":not argument must be a simple selector. Was: " & repr(notQuery))
             
@@ -634,13 +641,13 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
 
             # Safe because we know it's a simple selector
             let demand = newDemand(tkPseudoNot, notPartialQuery.demands[0])
-            demandStack.add demand
+            demandBuffer.add demand
             stack.setLen stack.len - 2
 
         of nthKinds:
             let (a, b) = parsePseudoNthArguments(prev.value)
             let demand = newPseudoDemand(stack[^2].kind, a, b)
-            demandStack.add demand
+            demandBuffer.add demand
             stack.setLen stack.len - 2
 
         else:
@@ -652,17 +659,17 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
                 "Invalid parser state. Expected stack length to be 1. Stack: " & repr(stack))
 
         let combinator = prev.kind.Combinator
-        queryRoot.append demandStack, combinator
+        queryRoot.append demandBuffer, combinator
         stack = @[]
-        demandStack = @[]
+        demandBuffer = @[]
 
     of tkComma:
         if stack.len != 1:
             raise newUnexpectedCharacterException(',')
-        queryRoot.append demandStack, cmLeaf
+        queryRoot.append demandBuffer, cmLeaf
         query.roots.add queryRoot
         stack = @[]
-        demandStack = @[]
+        demandBuffer = @[]
         queryRoot = nil
 
     else: discard
@@ -679,9 +686,8 @@ proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     if prev.kind == tkIdentifier and prevPrev.kind in { tkClass, tkId }:
         return true
 
-iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
+iterator tokenize(rawInput: string, options: Options): tuple[idx: int, token: Token] =
     let input = rawInput.strip
-    let max = high(input)
     var idx = 0
     var prevToken : Token
     var prevPrevtoken : Token
@@ -766,7 +772,7 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
             while input[idx] != ')':
                 buffer.add input[idx]
                 idx.inc
-                if idx > max:
+                if idx > high(input):
                     raise newException(ParseError, "Non-terminated pseudo argument list")
 
             idx.inc
@@ -797,7 +803,10 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
 
         else: 
             var buffer = ""
-            readIdentifier(input, idx, buffer)
+            if options.unicodeIdentifiers:
+                readIdentifier(input, idx, buffer)
+            else:
+                readIdentifierAscii(input, idx, buffer)
 
             if buffer.isNilOrEmpty:
                 raise newUnexpectedCharacterException($input.runeAt(idx))
@@ -982,7 +991,7 @@ proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var 
                     let nextContext = context.forward(next, queryRoot.combinator)
                     subquery.execRecursive(nextContext, output)
 
-            if not queryRoot.canFindMultiple(context.combinator): break
+            if not queryRoot.canFindMultiple(context.combinator, context.options): break
             when context.single:
                 if output.len > 0:
                     break
@@ -1011,25 +1020,25 @@ proc parseHtmlQuery*(queryString: string, options: Options): Query =
     let query = Query(roots: @[])
     var queryRoot: PartialQuery = nil
     var stack = newSeq[Token]()
-    var demandStack = newSeq[Demand]()
+    var demandBuffer = newSeq[Demand]()
 
     template printDebug(token: string) =
         log "token: " & $token
         log "stack: " & $stack
-        log "demands: " & $demandStack
+        log "demands: " & $demandBuffer
         log "* * *"
 
-    for idx, token in tokenize(queryString):
+    for idx, token in tokenize(queryString, options):
         printDebug($token)
         stack.add token
-        reduce(stack, demandStack, queryRoot, query)
+        reduce(stack, demandBuffer, queryRoot, query, options)
 
     printDebug("n/a")
 
     if stack.len > 0:
         raise newException(ParseError, "Unexpected end of input")
 
-    queryRoot.append demandStack, cmLeaf
+    queryRoot.append demandBuffer, cmLeaf
     query.roots.add queryRoot
     query.optimize
     query.options = options
@@ -1039,16 +1048,25 @@ proc parseHtmlQuery*(queryString: string, options: Options): Query =
 
     return query
 
-proc parseHtmlQuery*(queryString: string): Query =
-    parseHtmlQuery(queryString, defaultOptions())
-
-proc querySelector*(root: XmlNode, queryString: string): XmlNode =
-    let query = parseHtmlQuery(queryString)
+proc querySelector*(root: XmlNode, queryString: string, options: Options): XmlNode =
+    let query = parseHtmlQuery(queryString, options)
     let lst = query.exec(root, single = true)
     if lst.len > 0:
         return lst[0]
     return nil
 
-proc querySelectorAll*(root: XmlNode, queryString: string) : seq[XmlNode] =
-    let query = parseHtmlQuery(queryString)
+proc querySelectorAll*(root: XmlNode, queryString: string, options: Options) : seq[XmlNode] =
+    let query = parseHtmlQuery(queryString, options)
     return query.exec(root, single = false)
+
+# Overloads with default options
+
+proc parseHtmlQuery*(queryString: string): Query =
+    parseHtmlQuery(queryString, defaultOptions())
+
+proc querySelector*(root: XmlNode, queryString: string): XmlNode =
+    querySelector(root, queryString, defaultOptions())
+
+proc querySelectorAll*(root: XmlNode, queryString: string) : seq[XmlNode] =
+    querySelectorAll(root, queryString, defaultOptions())
+    

@@ -7,6 +7,7 @@
 #       - Allow/disallow duplicate id's (currently always disallows)
 #       - Allow/disallow complex :not expressions
 #       - Allow/disallow non-ascii in identifiers
+#  - Is `optimize` bugged when using different combinators? probably
 
 
 import xmltree
@@ -114,6 +115,11 @@ type
         position: NodeWithParent
         combinator: Combinator
 
+    ParseContext = object
+        options: Options
+        query: Query
+        currentRoot: PartialQuery
+
     Options* = object
         # Assume unique id's or not
         uniqueIds: bool
@@ -181,8 +187,11 @@ proc attrComparerString(kind: TokenKind): string =
     of tkAttributeSubstring: return "*="
     else: raise newException(Exception, "Invalid attr kind: " & $kind)
 
+proc newUnexpectedCharacterException(s: string): ref ParseError =
+    return newException(ParseError, "Unexpected character: '" & s & "'")
+
 proc newUnexpectedCharacterException(c: char): ref ParseError =
-    return newException(ParseError, "Unexpected character: '" & c & "'")
+    newUnexpectedCharacterException($c)
 
 proc newDemand(kind: static[TokenKind], notSelector: Demand): Demand =
     return Demand(kind: kind, notSelector: notSelector)
@@ -268,8 +277,6 @@ proc debugToString(q: PartialQuery): string =
         if idx != high(q.demands):
             result.add ", "
 
-    # result = q.demands.join(", ") & " " & $q.combinator
-
     if q.nextQueries.len > 0:
         result.add "\n\t"
         
@@ -279,7 +286,6 @@ proc debugToString(q: PartialQuery): string =
             if idx != high(q.nextQueries):
                 joined.add "\n"
         result.add joined.indent "\t"
-        #q.nextQueries.join("\n").indent "\t"
 
 proc rootStrings(q: PartialQuery): seq[string] =
     var common = ""
@@ -393,8 +399,8 @@ proc isSimpleSelector(q: Query): bool =
 proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: static[bool], opts: Options): SearchContext[single] =
     SearchContext[single](position: pos, combinator: comb, options: opts)
 
-# Create the next context state, going forward in the search
 proc forward[single: static[bool]](ctx: SearchContext[single], pos: NodeWithParent, comb: Combinator): SearchContext[single] =
+    # Create the next context state, going forward in the search
     SearchContext[single](position: pos, combinator: comb, options: ctx.options)
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
@@ -430,7 +436,6 @@ proc readStringLiteral(input: string, idx: var int, buffer: var string) =
     while input[idx] != ch:
         if input[idx] == '\\':
             readEscape(input, idx, buffer)
-
         else:
             buffer.add input[idx]
             idx.inc
@@ -441,31 +446,38 @@ proc readStringLiteral(input: string, idx: var int, buffer: var string) =
     idx.inc
 
 proc readIdentifier(input: string, idx: var int, buffer: var string) =
-    if input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits):
+    const intIdentifiers = {
+        'a'.int .. 'z'.int, 'A'.int .. 'Z'.int,
+        '0'.int .. '9'.int,
+        '-'.int, '_'.int, '\\'.int
+    }
+
+    if input[idx] == '_' or 
+            (input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits)):
         raise newUnexpectedCharacterException(input[idx + 1])
 
-    while input[idx] in identifiers and idx < input.len:
-        if input[idx] == '\\':
-            const hexInput = HexDigits + { ' ' }
-            var codePointStr = ""
-            idx.inc
-            while input[idx] in hexInput and codePointStr.len < 6:
-                if input[idx] != ' ':
-                    codePointStr.add input[idx]
-                    idx.inc
-                else:
-                    idx.inc
-                    break
+    proc isValidIdentifier(rune: Rune): bool =
+        if rune.int in intIdentifiers:
+            return true
+        # Spec: https://www.w3.org/TR/CSS21/syndata.html#value-def-identifier
+        return rune >=% 160.Rune
 
-            if codePointStr.isNilOrEmpty:
-                buffer.add input[idx]
-                idx.inc
-            else:
-                let unicodeCharacter = codePointStr.parseHexInt.Rune.toUTF8
-                buffer.add unicodeCharacter
+    while true:
+        # NOTE: `idx` is the byte offset of input, so `runeAt(idx)` is correct.
+        let rune = input.runeAt(idx)
+
+        if not isValidIdentifier(rune):
+            break
+
+        if rune == '\\'.Rune:
+            readEscape(input, idx, buffer)
         else:
-            buffer.add input[idx]
-            idx.inc
+            let unicodeCh = $rune    
+            idx.inc unicodeCh.len
+            buffer.add unicodeCh
+
+        if idx > high(input):
+            break
 
 proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
     let input = raw.strip
@@ -563,7 +575,10 @@ proc reduce(stack: var seq[Token], demandStack: var seq[Demand], queryRoot: var 
     case prev.kind
 
     of tkIdentifier:
-        if stack[^2].kind == tkClass:
+        if stack.len == 1:
+            raise newException(ParseError, "Unexpected identifier: " & prev.value)
+
+        elif stack[^2].kind == tkClass:
             let demand = newAttributeDemand(tkAttributeItem, "class", prev.value)
             demandStack.add demand
             stack.setLen stack.len - 2
@@ -692,24 +707,24 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
                 token = newToken(tkAttributeItem)
                 idx.inc 2
             else:
-                idx.inc
                 token = newToken(tkCombinatorSiblings)
+                idx.inc
 
         of '+':
-            idx.inc
             token = newToken(tkCombinatorNextSibling)
+            idx.inc
 
         of '>':
-            idx.inc
             token = newToken(tkCombinatorChildren)
+            idx.inc
 
         of '[':
-            idx.inc
             token = newToken(tkBracketStart)
+            idx.inc
 
         of ']':
-            idx.inc
             token = newToken(tkBracketEnd)
+            idx.inc
 
         of ':':
             var buffer = ""
@@ -751,15 +766,6 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
             idx.inc
             token = newToken(tkParam, buffer)
 
-        of beginingIdentifiers:
-            var buffer = ""
-            readIdentifier(input, idx, buffer)
-
-            if prevToken.isNil or prevToken.kind in combinatorKinds + { tkComma }:
-                token = newToken(tkElement, buffer)
-            else:
-                token = newToken(tkIdentifier, buffer)
-
         of '=':
             token = newToken(tkAttributeExact)
             idx.inc
@@ -783,7 +789,17 @@ iterator tokenize(rawInput: string): tuple[idx: int, token: Token] =
             token = newToken(tkComma)
             idx.inc
 
-        else: discard
+        else: 
+            var buffer = ""
+            readIdentifier(input, idx, buffer)
+
+            if buffer.isNilOrEmpty:
+                raise newUnexpectedCharacterException($input.runeAt(idx))
+
+            if prevToken.isNil or prevToken.kind in combinatorKinds + { tkComma }:
+                token = newToken(tkElement, buffer)
+            else:
+                token = newToken(tkIdentifier, buffer)
 
         if not skip:
             if token.isNil:

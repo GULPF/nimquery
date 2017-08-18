@@ -166,12 +166,15 @@ const html = """
             <div id="test38-first"></div>
             <div id="test38-second"></div>
         </div>
+
+        <div id="test39">
+            <div id="exämple"></div>
+        </div>
     </body>
 </html>
 """
 
 let xml = parseHtml(newStringStream(html))
-echo $xml
 
 # Must be template so tests happen at the right place
 template checkAttr(el: XmlNode, attrName, attrValue: string) =
@@ -483,3 +486,7 @@ suite "nimquery":
 
         qStr = $(parseHtmlQuery("div > a, div > p"))
         check(qStr == "div > a, div > p")
+
+    test "Non-ascii identifier":
+        var els = xml.querySelectorAll("#test39 #exämple")
+        check(els.len == 1)

@@ -46,26 +46,32 @@ echo elements
 ## API
 
 ```nim
-proc querySelectorAll*(queryString: string): seq[XmlNode]
+proc querySelectorAll*(XmlNode: root, queryString: string, options: Options): seq[XmlNode]
+proc querySelectorAll*(XmlNode: root, queryString: string): seq[XmlNode]
 ```
 Get all elements matching `queryString`.  
-Raises `ParseError` if parsing of `queryString` fails.
+Raises `ParseError` if parsing of `queryString` fails.  
+See [Options](#options) for information about the `options` parameter.
 
 - - -
 
 ```nim
-proc querySelector*(queryString: string): XmlNode
+proc querySelector*(XmlNode: root, queryString: string, options: Options): XmlNode
+proc querySelector*(XmlNode: root, queryString: string): XmlNode
 ```
 Get the first element matching `queryString`, or `nil` if no such element exists.  
-Raises `ParseError` if parsing of `queryString` fails.
+Raises `ParseError` if parsing of `queryString` fails.  
+See [Options](#options) for information about the `options` parameter.
 
 - - -
 
 ```nim
+proc parseHtmlQuery*(queryString: string, options: Options): Query
 proc parseHtmlQuery*(queryString: string): Query
 ```
 Parses a query for later use.  
-Raises `ParseError` if parsing of `queryString` fails.
+Raises `ParseError` if parsing of `queryString` fails.  
+See [Options](#options) for information about the `options` parameter. 
 
 - - -
 
@@ -73,4 +79,7 @@ Raises `ParseError` if parsing of `queryString` fails.
 proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode]
 ```
 Execute an already parsed query. If `single = true`, it will never return more than one element.
+
+### Options <a name="options"></a>
+todo
 

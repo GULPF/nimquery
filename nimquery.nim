@@ -462,7 +462,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
         raise newUnexpectedCharacterException(input[idx + 1])
 
     proc isValidIdentifier(rune: Rune): bool =
-        if rune.int in intIdentifiers:
+        if rune.int32 in intIdentifiers:
             return true
         # Spec: https://www.w3.org/TR/CSS21/syndata.html#value-def-identifier
         return rune >=% 160.Rune

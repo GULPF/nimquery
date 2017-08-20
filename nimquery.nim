@@ -97,10 +97,19 @@ type
         cmSiblings = tkCombinatorSiblings,
         cmLeaf # Special case for the last query
     
+    Option* = enum
+        # Assume unique id's or not
+        optUniqueIds 
+        # Allow non-ascii in identifiers (e.g `#exämple`)
+        optUnicodeIdentifiers 
+        # Disallow more complex :not selectors. Annoying but that's the spec.   
+        # Combinators/comma are not allowed even if true.
+        optSimpleNot
+
     # Because of the comma operator, a query can consist of multiple complete queries.
     Query* = ref object
         roots: seq[PartialQuery]
-        options: Options
+        options: set[Option]
     
     PartialQuery = ref object
         # `nextQueries` will never contain more than one element while parsing.
@@ -112,18 +121,11 @@ type
         combinator: Combinator
 
     SearchContext[single: static[bool]] = object
-        options: Options
+        options: set[Option]
         position: NodeWithParent
         combinator: Combinator
 
-    Options* = object
-        # Assume unique id's or not
-        uniqueIds: bool
-        # Allow non-ascii in identifiers (e.g `#exämple`)
-        unicodeIdentifiers: bool
-        # Disallow more complex :not selectors. Annoying but that's the spec.
-        # Combinators/comma are not allowed even if true.        
-        simpleNot: bool
+const nimqueryDefaultOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }
 
 const beginingIdentifiers = Letters + { '-', '\\' }
 const identifiers = Letters + Digits + { '-', '_', '\\' }
@@ -144,11 +146,6 @@ const combinatorKinds = {
 template log(msg: string): typed =
     when DEBUG:
         echo msg
-
-proc defaultOptions(): Options =
-    result.uniqueIds = true
-    result.unicodeIdentifiers = true
-    result.simpleNot = true
 
 proc indent(str, space: string): string =
     result = str.replace("\n", "\n" & space)
@@ -330,11 +327,11 @@ proc append(q: var PartialQuery, demands: seq[Demand], combinator: Combinator) =
             itr = itr.nextQueries[0]
         itr.nextQueries = @[ newPartialQuery(demands, combinator) ]
 
-proc canFindMultiple(q: PartialQuery, comb: Combinator, options: Options): bool = 
+proc canFindMultiple(q: PartialQuery, comb: Combinator, options: set[Option]): bool = 
     # Returns true if the current queries demands can be satisfied by multiple elements.
     # This is used to check if the search should stop after the first element has been found.
     for demand in q.demands:
-        if options.uniqueIds and demand.kind in attributeKinds and demand.attrName == "id":
+        if optUniqueIds in options and demand.kind in attributeKinds and demand.attrName == "id":
             return false
         if comb in { cmChildren, cmSiblings } and demand.kind in
                 { tkPseudoFirstOfType, tkPseudoLastOfType,
@@ -395,13 +392,13 @@ proc optimize(query: Query) =
             mergeToIdx.inc
             mergeFromIdx = mergeToIdx + 1
 
-proc isValidNotQuery(q: Query, options: Options): bool =
+proc isValidNotQuery(q: Query, options: set[Option]): bool =
     return
         q.roots.len == 1 and
         q.roots[0].nextQueries.len == 0 and
-        (q.roots[0].demands.len == 1 or not options.simpleNot)
+        (q.roots[0].demands.len == 1 or not (optSimpleNot in options))
 
-proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: static[bool], opts: Options): SearchContext[single] =
+proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: static[bool], opts: set[Option]): SearchContext[single] =
     SearchContext[single](position: pos, combinator: comb, options: opts)
 
 proc forward[single: static[bool]](ctx: SearchContext[single], pos: NodeWithParent, comb: Combinator): SearchContext[single] =
@@ -577,8 +574,8 @@ proc newPseudoToken(str: string): Token =
     else:
         raise newException(ParseError, "Unknown pseudo: " & str)
 
-proc parseHtmlQuery*(queryString: string, options: Options): Query # Forward declare for usage in `reduce`
-proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var PartialQuery, query: Query, options: Options) =
+proc parseHtmlQuery*(queryString: string, options: set[Option]): Query # Forward declare for usage in `reduce`
+proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var PartialQuery, query: Query, options: set[Option]) =
     if stack.len == 0:
         return
 
@@ -686,7 +683,7 @@ proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     if prev.kind == tkIdentifier and prevPrev.kind in { tkClass, tkId }:
         return true
 
-iterator tokenize(rawInput: string, options: Options): tuple[idx: int, token: Token] =
+iterator tokenize(rawInput: string, options: set[Option]): tuple[idx: int, token: Token] =
     let input = rawInput.strip
     var idx = 0
     var prevToken : Token
@@ -803,7 +800,7 @@ iterator tokenize(rawInput: string, options: Options): tuple[idx: int, token: To
 
         else: 
             var buffer = ""
-            if options.unicodeIdentifiers:
+            if optUnicodeIdentifiers in options:
                 readIdentifier(input, idx, buffer)
             else:
                 readIdentifierAscii(input, idx, buffer)
@@ -1016,7 +1013,7 @@ proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode] =
         let context = initSearchContext(root, cmDescendants, single, query.options)
         queryRoot.execRecursive(context, result)
 
-proc parseHtmlQuery*(queryString: string, options: Options): Query =
+proc parseHtmlQuery*(queryString: string, options: set[Option]): Query =
     let query = Query(roots: @[])
     var queryRoot: PartialQuery = nil
     var stack = newSeq[Token]()
@@ -1048,25 +1045,25 @@ proc parseHtmlQuery*(queryString: string, options: Options): Query =
 
     return query
 
-proc querySelector*(root: XmlNode, queryString: string, options: Options): XmlNode =
+proc querySelector*(root: XmlNode, queryString: string, options: set[Option]): XmlNode =
     let query = parseHtmlQuery(queryString, options)
     let lst = query.exec(root, single = true)
     if lst.len > 0:
         return lst[0]
     return nil
 
-proc querySelectorAll*(root: XmlNode, queryString: string, options: Options) : seq[XmlNode] =
+proc querySelectorAll*(root: XmlNode, queryString: string, options: set[Option]) : seq[XmlNode] =
     let query = parseHtmlQuery(queryString, options)
     return query.exec(root, single = false)
 
 # Overloads with default options
 
 proc parseHtmlQuery*(queryString: string): Query =
-    parseHtmlQuery(queryString, defaultOptions())
+    parseHtmlQuery(queryString, nimqueryDefaultOptions)
 
 proc querySelector*(root: XmlNode, queryString: string): XmlNode =
-    querySelector(root, queryString, defaultOptions())
+    querySelector(root, queryString, nimqueryDefaultOptions)
 
 proc querySelectorAll*(root: XmlNode, queryString: string) : seq[XmlNode] =
-    querySelectorAll(root, queryString, defaultOptions())
+    querySelectorAll(root, queryString, nimqueryDefaultOptions)
     

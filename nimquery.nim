@@ -17,7 +17,7 @@ import strtabs
 import unicode
 import math
 
-const DEBUG = false
+const DEBUG = true
 
 type
     ParseError* = object of Exception
@@ -79,7 +79,7 @@ type
         of nthKinds:
             a, b: int
         of tkPseudoNot:
-            notSelector: Demand
+            notQuery: PartialQuery
         of tkElement:
             element: string
         else: discard
@@ -143,6 +143,10 @@ const combinatorKinds = {
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
+proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
+proc `$`(q: PartialQuery): string {. noSideEffect .}
+proc parseHtmlQuery*(queryString: string, options: set[Option]): Query
+
 template log(msg: string): typed =
     when DEBUG:
         echo msg
@@ -186,8 +190,8 @@ proc newUnexpectedCharacterException(s: string): ref ParseError =
 proc newUnexpectedCharacterException(c: char): ref ParseError =
     newUnexpectedCharacterException($c)
 
-proc newDemand(kind: static[TokenKind], notSelector: Demand): Demand =
-    return Demand(kind: kind, notSelector: notSelector)
+proc newDemand(kind: static[TokenKind], notQuery: PartialQuery): Demand =
+    return Demand(kind: kind, notQuery: notQuery)
 
 proc newDemand(kind: static[TokenKind], element: string): Demand =
     return Demand(kind: kind, element: element)
@@ -212,7 +216,7 @@ proc `$`(demand: Demand): string =
         else:
             result = "[" & demand.attrName & demand.kind.attrComparerString & "'" & demand.attrValue & "']"
     of tkPseudoNot:
-        result = ":" & $demand.kind & "(" & $demand.notSelector & ")"
+        result = ":" & $demand.kind & "(" & $demand.notQuery & ")"
     of nthKinds:
         result =  ":" & $demand.kind & "(" & $demand.a & "n, " & $demand.b & ")"
     of pseudoNoParamsKinds:
@@ -230,7 +234,7 @@ proc `==`(d1, d2: Demand): bool =
     of nthKinds:
         return d1.a == d2.b
     of tkPseudoNot:
-        return d1.notSelector == d2.notSelector
+        return d1.notQuery == d2.notQuery
     of tkElement:
         return d1.element == d2.element
     else:
@@ -574,7 +578,6 @@ proc newPseudoToken(str: string): Token =
     else:
         raise newException(ParseError, "Unknown pseudo: " & str)
 
-proc parseHtmlQuery*(queryString: string, options: set[Option]): Query # Forward declare for usage in `reduce`
 proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var PartialQuery, query: Query, options: set[Option]) =
     if stack.len == 0:
         return
@@ -634,10 +637,7 @@ proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var
                 raise newException(ParseError,
                     ":not argument must be a simple selector. Was: " & repr(notQuery))
             
-            var notPartialQuery = notQuery.roots[0]
-
-            # Safe because we know it's a simple selector
-            let demand = newDemand(tkPseudoNot, notPartialQuery.demands[0])
+            let demand = newDemand(tkPseudoNot, notQuery.roots[0])
             demandBuffer.add demand
             stack.setLen stack.len - 2
 
@@ -764,11 +764,34 @@ iterator tokenize(rawInput: string, options: set[Option]): tuple[idx: int, token
                 skip = true
 
         of '(':
+            # Fragile, ugly, ok
+            
             var buffer = ""
+            var paramContextCount = 0
+            var dblQuoteStringContext = false
+            var sglQuoteStringContext = false
             idx.inc
-            while input[idx] != ')':
+        
+            while input[idx] != ')' or paramContextCount > 0 or dblQuoteStringContext or sglQuoteStringContext:
+                if input[idx] == '"' and not sglQuoteStringContext:
+                    dblQuoteStringContext = not dblQuoteStringContext
+
+                if input[idx] == '\'' and not dblQuoteStringContext:
+                    sglQuoteStringContext = not sglQuoteStringContext
+
+                if input[idx] == '(' and not dblQuoteStringContext and not sglQuoteStringContext:
+                    paramContextCount.inc
+
+                if input[idx] == ')' and not dblQuoteStringContext and not sglQuoteStringContext:
+                    paramContextCount.dec
+
+                if input[idx] == '\\':
+                    buffer.add input[idx]
+                    idx.inc
+
                 buffer.add input[idx]
                 idx.inc
+
                 if idx > high(input):
                     raise newException(ParseError, "Non-terminated pseudo argument list")
 
@@ -906,7 +929,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
         return true
 
     of tkPseudoNot:
-        return not pair.satisfies(demand.notSelector)
+        return not pair.satisfies(demand.notQuery.demands)
 
     of tkPseudoNthChild:
         return validateNth(demand.a, demand.b, pair.elementIndex)
@@ -976,7 +999,6 @@ iterator searchNextSibling(queryRoot: PartialQuery, position: NodeWithParent): N
         break # by definition, there can only be one next sibling
 
 proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var seq[XmlNode]) =
-    
     var position = context.position
 
     template search(itr: iterator(q: PartialQuery, p: NodeWithParent): NodeWithParent {. inline .}): typed =

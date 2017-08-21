@@ -176,6 +176,13 @@ const html = """
                 <span></span>
             </div>
         </div>
+
+        <div id="test41">
+            <div>1</div>
+            <div class="maybe-skip">2</div>
+            <div class="maybe-skip">3</div>
+            <div>4</div>
+        </div>
     </body>
 </html>
 """
@@ -500,3 +507,8 @@ suite "nimquery":
     test "Issue with optimization of roots with different combinators":
         var els = xml.querySelectorAll("#test40 > div, #test40 span")
         check(els.len == 2)
+
+    test "Nested pseudos with complex :not(...)":
+        let options = nimqueryDefaultOptions - { optSimpleNot }
+        var els = xml.querySelectorAll("#test41 div:not(.maybe-skip:nth-child(even))", options)
+        check(els.len == 3)

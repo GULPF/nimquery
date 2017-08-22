@@ -46,7 +46,7 @@ echo elements
 ## API
 
 ```nim
-proc querySelectorAll*(XmlNode: root, queryString: string, options: Options): seq[XmlNode]
+proc querySelectorAll*(XmlNode: root, queryString: string, options: set[NimqueryOption]): seq[XmlNode]
 proc querySelectorAll*(XmlNode: root, queryString: string): seq[XmlNode]
 ```
 Get all elements matching `queryString`.  
@@ -56,7 +56,7 @@ See [Options](#options) for information about the `options` parameter.
 - - -
 
 ```nim
-proc querySelector*(XmlNode: root, queryString: string, options: Options): XmlNode
+proc querySelector*(XmlNode: root, queryString: string, options: set[NimqueryOption]): XmlNode
 proc querySelector*(XmlNode: root, queryString: string): XmlNode
 ```
 Get the first element matching `queryString`, or `nil` if no such element exists.  
@@ -66,7 +66,7 @@ See [Options](#options) for information about the `options` parameter.
 - - -
 
 ```nim
-proc parseHtmlQuery*(queryString: string, options: Options): Query
+proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption]): Query
 proc parseHtmlQuery*(queryString: string): Query
 ```
 Parses a query for later use.  
@@ -81,5 +81,38 @@ proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode]
 Execute an already parsed query. If `single = true`, it will never return more than one element.
 
 ### Options <a name="options"></a>
-todo
+The `NimqueryOption` enum contains flags for configuring the behavior when parsing/searching:
+
+- `optUniqueIds`: Indicates if id attributes should be assumed to be unique.
+- `optSimpleNot`: Indicates if only simple selectors are allowed in the `:not(...)`. Note that combinators are never allowed.
+- `optUnicodeIdentifiers`: Indicates if unicode characters are allowed inside identifiers. Doesn't affect strings where unicode is always allowed.
+
+The default options are exported as `const nimqueryDefaultOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }`.
+
+Below is an example of using the options parameter to allow a complex `:not(...)` selector.
+
+```nim
+import xmltree
+import htmlparser
+import streams
+import nimquery
+
+let html = """
+<!DOCTYPE html>
+  <html>
+    <head><title>Example</title></head>
+    <body>
+      <p>1</p>
+      <p class="maybe-skip">2</p>
+      <p class="maybe-skip">3</p>
+      <p>4</p>
+    </body>
+  </html>
+"""
+let xml = parseHtml(newStringStream(html))
+let options = nimqueryDefaultOptions - { optSimpleNot }
+let elements = xml.querySelectorAll("p:not(.maybe-skip:nth-child(even))", options)
+echo elements
+# => @[<p>1</p>, <p class="maybe-skip">3</p>, <p>4</p>]
+```
 

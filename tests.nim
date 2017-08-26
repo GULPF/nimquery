@@ -53,9 +53,11 @@ const html = """
         <div class="test15-B"></div>
         <div class="test15-C"></div>
 
-        <div class="test16-A"></div>
-        <div class="test16-B"></div>
-        <div class="test16-C"></div>
+        <div>
+            <div class="test16-A"></div>
+            <div class="test16-B"></div>
+            <div class="test16-C"></div>
+        </div>
 
         <div class="test18 fake"></div>
         <div class="test18" id="test18"></div>
@@ -293,12 +295,8 @@ suite "nimquery":
         check(el.isNil)
 
     test "any sibling combinator":
-        var el = xml.querySelector(".test16-A ~ .test16-B")
-        check(not el.isNil)
-        el = xml.querySelector(".test16-A ~ .test16-C")
-        check(not el.isNil)
-        el = xml.querySelector(".test16-B ~ .test16-A")
-        check(not el.isNil)
+        var els = xml.querySelectorAll(".test16-B ~ *")
+        check(els.len == 1)
 
     test "root match":
         var root = <>span(id="test17")

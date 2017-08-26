@@ -980,8 +980,8 @@ iterator searchChildren(queryRoot: PartialQuery, position: NodeWithParent): Node
             yield pair
 
 iterator searchSiblings(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent = 
-    for pair in position.parent.elements:
-        if pair.child != position.child and pair.satisfies queryRoot.demands:
+    for pair in position.parent.elements(offset = position):
+        if pair.satisfies queryRoot.demands:
             yield pair
 
 iterator searchNextSibling(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =

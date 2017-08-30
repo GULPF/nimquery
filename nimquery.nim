@@ -65,7 +65,7 @@ const nthKinds = {
 }
 
 type
-    DemandRef = ref object
+    NilableDemand = ref object
         case kind: Tokenkind
         of attributeKinds:
             attrName, attrValue: string
@@ -77,10 +77,12 @@ type
             element: string
         else: discard
 
-    Demand = DemandRef not nil
+    Demand = NilableDemand not nil
 
     NodeWithParent = tuple
         parent: XmlNode
+        # Index is the index used by `xmltree`,
+        # elementIndex is the index when only counting elements (not text nodes etc).
         index, elementIndex: int
 
     Combinator = enum
@@ -155,7 +157,7 @@ proc safeCharCompare(str: string, idx: int, cs: set[char]): bool {. inline .} =
 proc safeCharCompare(str: string, idx: int, c: char): bool {. inline .} =
     return str.safeCharCompare(idx, { c })
 
-proc child(pair: NodeWithParent): XmlNode =
+proc node(pair: NodeWithParent): XmlNode =
     return pair.parent[pair.index]
 
 proc `$`(comb: Combinator): string =
@@ -233,7 +235,7 @@ proc `==`(d1, d2: Demand): bool =
     else:
         raise newException(Exception, "Invalid demand kind: " & $d1.kind)
 
-iterator elements(node: XmlNode, offset: NodeWithParent = (nil, -1, -1)): NodeWithParent =
+iterator children(node: XmlNode, offset: NodeWithParent = (nil, -1, -1)): NodeWithParent =
     var idx = offset.index + 1
     var elIdx = offset.elementIndex + 1
     while idx < node.len:
@@ -853,7 +855,7 @@ proc validateNth(a, b, nSiblings: int): bool =
     return n.floor == n and n >= 0
 
 proc satisfies(pair: NodeWithParent, demand: Demand): bool =
-    let node = pair.child
+    let node = pair.node
 
     case demand.kind
     of tkAttributeExists:
@@ -892,15 +894,15 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
         return node.len == 0
 
     of tkPseudoOnlyChild:
-        for siblingPair in pair.parent.elements:
-            if siblingPair.child != node:
+        for siblingPair in pair.parent.children:
+            if siblingPair.node != node:
                 return false
         return true
 
     of tkPseudoOnlyOfType:
-        for siblingPair in pair.parent.elements:
-            if siblingPair.child != node and
-                    siblingPair.child.tag == node.tag:
+        for siblingPair in pair.parent.children:
+            if siblingPair.node != node and
+                    siblingPair.node.tag == node.tag:
                 return false
         return true
 
@@ -908,18 +910,18 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
         return pair.elementIndex == 0
 
     of tkPseudoLastChild:
-        for siblingPair in pair.parent.elements(offset = pair):
+        for siblingPair in pair.parent.children(offset = pair):
             return false
         return true
     
     of tkPseudoFirstOfType:
-        for siblingPair in pair.parent.elements:
-            if siblingPair.child.tag == node.tag:
-                return siblingPair.child == node
+        for siblingPair in pair.parent.children:
+            if siblingPair.node.tag == node.tag:
+                return siblingPair.node == node
 
     of tkPseudoLastOfType:
-        for siblingPair in pair.parent.elements(offset = pair):
-            if siblingPair.child.tag == node.tag:
+        for siblingPair in pair.parent.children(offset = pair):
+            if siblingPair.node.tag == node.tag:
                 return false
         return true
 
@@ -931,24 +933,24 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
 
     of tkPseudoNthLastChild:
         var nSiblingsAfter = 0
-        for siblingPair in pair.parent.elements(offset = pair):
+        for siblingPair in pair.parent.children(offset = pair):
             nSiblingsAfter.inc
         return validateNth(demand.a, demand.b, nSiblingsAfter)
 
     of tkPseudoNthOfType:
         var nSiblingsOfTypeBefore = 0
-        for siblingPair in pair.parent.elements:
-            if siblingPair.child == node:
+        for siblingPair in pair.parent.children:
+            if siblingPair.node == node:
                 break
-            elif siblingPair.child.tag == node.tag:
+            elif siblingPair.node.tag == node.tag:
                 nSiblingsOfTypeBefore.inc
 
         return validateNth(demand.a, demand.b, nSiblingsOfTypeBefore)
 
     of tkPseudoNthLastOfType:
         var nSiblingsOfTypeAfter = 0
-        for siblingPair in pair.parent.elements(offset = pair):
-            if siblingPair.child.tag == node.tag:
+        for siblingPair in pair.parent.children(offset = pair):
+            if siblingPair.node.tag == node.tag:
                 nSiblingsOfTypeAfter.inc
 
             return validateNth(demand.a, demand.b, nSiblingsOfTypeAfter)
@@ -964,23 +966,23 @@ proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
 
 iterator searchDescendants(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
     var queue = newSeq[NodeWithParent]()
-    for nodeData in position.child.elements:
-        queue.add((parent: position.child, index: nodeData.index, elementIndex: nodeData.elementIndex))
+    for nodeData in position.node.children:
+        queue.add((parent: position.node, index: nodeData.index, elementIndex: nodeData.elementIndex))
 
     while queue.len > 0:
         let pair = queue.pop()
         if pair.satisfies queryRoot.demands:
             yield pair
-        for nodeData in pair.child.elements:
-            queue.insert((parent: pair.child, index: nodeData.index, elementIndex: nodeData.elementIndex), 0)
+        for nodeData in pair.node.children:
+            queue.insert((parent: pair.node, index: nodeData.index, elementIndex: nodeData.elementIndex), 0)
 
 iterator searchChildren(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
-    for pair in position.child.elements:
+    for pair in position.node.children:
         if pair.satisfies queryRoot.demands:
             yield pair
 
 iterator searchSiblings(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent = 
-    for pair in position.parent.elements(offset = position):
+    for pair in position.parent.children(offset = position):
         if pair.satisfies queryRoot.demands:
             yield pair
 
@@ -988,7 +990,7 @@ iterator searchNextSibling(queryRoot: PartialQuery, position: NodeWithParent): N
     # It's a bit silly to have an iterator which will only yield 0 or 1 element,
     # but it's nice for consistency with how the other combinators are implemented.
     
-    for pair in position.parent.elements(offset = position):
+    for pair in position.parent.children(offset = position):
         if pair.satisfies queryRoot.demands:
             yield pair
         break # by definition, there can only be one next sibling
@@ -999,7 +1001,7 @@ proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var 
     template search(itr: iterator(q: PartialQuery, p: NodeWithParent): NodeWithParent {. inline .}): typed =
         for next in itr(queryRoot, position):
             if queryRoot.nextQueries.len == 0:
-                output.add next.child
+                output.add next.node
             else:
                 for subquery in queryRoot.nextQueries:
                     let nextContext = context.forward(next, queryRoot.combinator)

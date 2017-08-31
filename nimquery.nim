@@ -4,7 +4,6 @@
 #  - If I change PartialQuery.Combinator to indicate combinator of PartialQuery,
 #    it will simplify a lot of things, including making the comma optimizations better.
 #  - Better case insensitivety. E.g `DIV` should match <div></div>
-#  - Better Whitespace handling (see spec)
 
 import xmltree
 import strutils
@@ -28,7 +27,8 @@ type
         #       This means that both `#foo%` and `[id=foo%]` is invalid, but not `[id="foo%"]` or `#foo\%`.
         tkIdentifier, tkString
 
-        tkClass, tkId, tkElement, tkUniversal
+        tkClass, tkId, tkElement
+        # tkUniversal
 
         tkCombinatorDescendents, tkCombinatorChildren
         tkCombinatorNextSibling, tkCombinatorSiblings
@@ -124,7 +124,6 @@ type
 
 const nimqueryDefaultOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }
 
-const beginingIdentifiers = Letters + { '-', '\\' }
 const identifiers = Letters + Digits + { '-', '_', '\\' }
 # NOTE: This is not the same as `strutils.Whitespace`. These values are defined by spec.
 const cssWhitespace = { '\x20', '\x09', '\x0A', '\x0D', '\x0C' }
@@ -414,27 +413,36 @@ proc readNumerics(input: string, idx: var int, buffer: var string) =
         idx.inc
 
 proc readEscape(input: string, idx: var int, buffer: var string) =
-    const hexInput = HexDigits + cssWhitespace
-
-    var codePointStr = ""
+    assert input[idx] == '\\'
     idx.inc
-    while input[idx] in hexInput and codePointStr.len < 6:
-        if input[idx] notin cssWhitespace:
-            codePointStr.add input[idx]
-            idx.inc
-        else:
-            idx.inc
-            break
 
-    if codePointStr.isNilOrEmpty:
-        buffer.add input[idx]
-        idx.inc
+    # Linefeed, carriage return and form feed can't be escaped.
+    if input[idx] in { '\x0C', '\x0D', '\x0A'}:
+        raise newUnexpectedCharacterException(input[idx])
+    
+    # No special handling is required for these. E.g '\n' means 'n', not 'newline'.
+    if input[idx] notin HexDigits:
+        # FIXME: Should this read a grapheme instead of a rune? I don't know
+        let runeStr = input.runeAt(idx).toUTF8
+        buffer.add runeStr
+        idx.inc runeStr.len
+
     else:
-        let unicodeCharacter = codePointStr.parseHexInt.Rune.toUTF8
-        buffer.add unicodeCharacter
+        var hexStr = ""
+
+        while input[idx] in HexDigits and hexStr.len < 6:
+            hexStr.add input[idx]
+            idx.inc
+    
+        # Skip whitespace after hex input
+        if input[idx] in cssWhitespace:
+            idx.inc
+
+        let runeStr = hexStr.parseHexInt.Rune.toUTF8
+        buffer.add runeStr
 
 proc readStringLiteral(input: string, idx: var int, buffer: var string) =
-    if input[idx] notin { '\'', '"' }: return 
+    assert input[idx] in { '\'', '"' }
 
     let ch = input[idx]
     idx.inc
@@ -458,7 +466,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
         '-'.int, '_'.int, '\\'.int
     }
 
-    if input[idx] == '_' or 
+    if input[idx] == '_' or input[idx] in Digits or
             (input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits)):
         raise newUnexpectedCharacterException(input[idx + 1])
 
@@ -466,7 +474,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
         if rune.int32 in intIdentifiers:
             return true
         # Spec: https://www.w3.org/TR/CSS21/syndata.html#value-def-identifier
-        return rune >=% 160.Rune
+        return rune >=% 0x00A0.Rune
 
     while idx < input.len:
         # NOTE: `idx` is the byte offset of input, so `runeAt(idx)` is correct.

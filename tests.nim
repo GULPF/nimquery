@@ -162,7 +162,8 @@ const html = """
             <div class="test36"></div>
         </div>
 
-        <div id="test37'"></div>
+        <div id="test37-'"></div>
+        <div id="test37-ö"></div>
 
         <div>
             <div id="test38-first"></div>
@@ -185,6 +186,13 @@ const html = """
             <div class="maybe-skip">3</div>
             <div>4</div>
         </div>
+
+        <div id="test42">
+            <blockquote><div></div></blockquote>
+            <div></div>
+            <div></div>
+            <p></p>
+        </div>
     </body>
 </html>
 """
@@ -193,320 +201,327 @@ let xml = parseHtml(newStringStream(html))
 
 # Must be template so tests happen at the right place
 template checkAttr(el: XmlNode, attrName, attrValue: string) =
-    
     if not el.isNil:
         check(el.attr(attrName) == attrValue)
     else:
         check("el is nil" == "")
 
-suite "nimquery":
+test "id selector":
+    let el = xml.querySelector("#test1")
+    check(not el.isNil)
+    check(el.tag == "p")
 
-    test "id selector":
-        let el = xml.querySelector("#test1")
-        check(not el.isNil)
-        check(el.tag == "p")
+test "class selector":
+    let el = xml.querySelector(".test2")
+    el.checkAttr("id", "test2")
 
-    test "class selector":
-        let el = xml.querySelector(".test2")
-        el.checkAttr("id", "test2")
+test "attribute (value)":
+    let queries = @[
+        "[data-custom=test3]",
+        "[  data-custom  =  test3  ]"
+    ]
 
-    test "attribute (value)":
-        let queries = @[
-            "[data-custom=test3]",
-            "[  data-custom  =  test3  ]"
-        ]
+    for query in queries:
+        let el = xml.querySelector(query)
+        el.checkAttr("id", "test3")
 
-        for query in queries:
-            let el = xml.querySelector(query)
-            el.checkAttr("id", "test3")
+test "attribute (quoted value)":
+    let el = xml.querySelector("[data-custom=\"test4\"]")
+    el.checkAttr("id", "test4")
 
-    test "attribute (quoted value)":
-        let el = xml.querySelector("[data-custom=\"test4\"]")
-        el.checkAttr("id", "test4")
+test "attribute (spaced value)":
+    let el = xml.querySelector("[data-custom=\"test5 space\"]")
+    el.checkAttr("id", "test5")
 
-    test "attribute (spaced value)":
-        let el = xml.querySelector("[data-custom=\"test5 space\"]")
-        el.checkAttr("id", "test5")
+test "attribute (bracketed value)":
+    let el = xml.querySelector("[data-custom=\"[test6]\"]")
+    el.checkAttr("id", "test6")
 
-    test "attribute (bracketed value)":
-        let el = xml.querySelector("[data-custom=\"[test6]\"]")
-        el.checkAttr("id", "test6")
+test "element selector":
+    let el = xml.querySelector("article")
+    el.checkAttr("id", "test7")
 
-    test "element selector":
-        let el = xml.querySelector("article")
-        el.checkAttr("id", "test7")
+test "direct child combinator":
+    let failQueries = @[
+        ".test8 > .test8-indirect-child",
+        ".test8    >     .test8-indirect-child",
+        ".test8>.test8-indirect-child",
+    ]
 
-    test "direct child combinator":
-        let failQueries = @[
-            ".test8 > .test8-indirect-child",
-            ".test8    >     .test8-indirect-child",
-            ".test8>.test8-indirect-child",
-        ]
-
-        for query in failQueries:
-            var el = xml.querySelector(query)
-            check(el.isNil)
-
-        let queries = @[
-            ".test8 > .test8-direct-child",
-            ".test8    >    .test8-direct-child",
-            ".test8>.test8-direct-child"
-        ]
-
-        for query in queries:
-            var el = xml.querySelector(query)
-            el.checkAttr("id", "test8")
-
-    test "attribute":
-        var el = xml.querySelector("[data-test9]")
-        el.checkAttr("id", "test9")
-
-    test "attribute (item match)":
-        var el = xml.querySelector("[data-custom~=foo2]")
-        el.checkAttr("id", "test10")
-
-    test "attribute (pipe match)":
-        var el = xml.querySelector("[data-custom|=test11]")
-        el.checkAttr("id", "test11")
-
-    test "descendants combinator":
-        let queries = @[
-            ".test12-outer .test12-inner",
-            ".test12-outer     .test12-inner"
-        ]
-        for query in queries:
-            var el = xml.querySelector(query)
-            el.checkAttr("id", "test12")
-
-    test "class selector on element with multiple classes":
-        var el = xml.querySelector(".test13")
-        el.checkAttr("id", "test13")
-
-    test "leading and trailing whitespace":
-        var el = xml.querySelector("   #test14   ")
-        el.checkAttr("id", "test14")
-
-    test "next sibling combinator":
-        var el = xml.querySelector(".test15-A + .test15-B")
-        check(not el.isNil)
-        el = xml.querySelector(".test15-A + .test15-C")
-        check(el.isNil)
-        el = xml.querySelector(".test15-B + .test15-A")
+    for query in failQueries:
+        var el = xml.querySelector(query)
         check(el.isNil)
 
-    test "any sibling combinator":
-        var els = xml.querySelectorAll(".test16-B ~ *")
-        check(els.len == 1)
+    let queries = @[
+        ".test8 > .test8-direct-child",
+        ".test8    >    .test8-direct-child",
+        ".test8>.test8-direct-child"
+    ]
 
-    test "root match":
-        var root = <>span(id="test17")
-        var el = root.querySelector("#test17")
-        check(not el.isNil)
+    for query in queries:
+        var el = xml.querySelector(query)
+        el.checkAttr("id", "test8")
 
-    test "pseudo :not":
-        var el = xml.querySelector(".test18:not(.fake)")
-        check(not el.isNil)
+test "attribute":
+    var el = xml.querySelector("[data-test9]")
+    el.checkAttr("id", "test9")
 
-    test "attribute start match":
-        var el = xml.querySelector("[data-custom^=\"test19\"]")
-        check(not el.isNil)
+test "attribute (item match)":
+    var el = xml.querySelector("[data-custom~=foo2]")
+    el.checkAttr("id", "test10")
 
-    test "attribute end match":
-        var el = xml.querySelector("[data-custom$=\"test20\"]")
-        check(not el.isNil)
+test "attribute (pipe match)":
+    var el = xml.querySelector("[data-custom|=test11]")
+    el.checkAttr("id", "test11")
 
-    test "attribute substring match":
-        var el = xml.querySelector("[data-custom*=\"test21\"]")
-        check(not el.isNil)
+test "descendants combinator":
+    let queries = @[
+        ".test12-outer .test12-inner",
+        ".test12-outer     .test12-inner"
+    ]
+    for query in queries:
+        var el = xml.querySelector(query)
+        el.checkAttr("id", "test12")
 
-    test "pseudo :empty":
-        var el = xml.querySelector(".test22-content:empty")
-        check(el.isNil)
-        el = xml.querySelector(".test22-empty:empty")
-        check(not el.isNil)
+test "class selector on element with multiple classes":
+    var el = xml.querySelector(".test13")
+    el.checkAttr("id", "test13")
 
-    test "pseudo :only-child":
-        var el = xml.querySelector(".test23-many-siblings:only-child")
-        check(el.isNil)
-        el = xml.querySelector(".test23-one-child:only-child")
-        check(not el.isNil)
+test "leading and trailing whitespace":
+    var el = xml.querySelector("   #test14   ")
+    el.checkAttr("id", "test14")
 
-    test "pseudo :only-of-type":
-        var el = xml.querySelector(".test24-case1:only-of-type")
-        check(el.isNil)
-        el = xml.querySelector(".test24-case2:only-of-type")
-        check(not el.isNil)
-        el = xml.querySelector(".test24-case3:only-of-type")
-        check(not el.isNil)
+test "next sibling combinator":
+    var el = xml.querySelector(".test15-A + .test15-B")
+    check(not el.isNil)
+    el = xml.querySelector(".test15-A + .test15-C")
+    check(el.isNil)
+    el = xml.querySelector(".test15-B + .test15-A")
+    check(el.isNil)
 
-    test "pseudo :first-child":
-        let el = xml.querySelector(".test25:first-child")
-        el.checkAttr("id", "test25")
+test "any next sibling combinator":
+    var els = xml.querySelectorAll(".test16-B ~ *")
+    check(els.len == 1)
 
-    test "pseudo :last-child":
-        let el = xml.querySelector(".test26:last-child")
-        el.checkAttr("id", "test26")
+test "root match":
+    var root = <>span(id="test17")
+    var el = root.querySelector("#test17")
+    check(not el.isNil)
 
-    test "pseudo :first-of-type":
-        let el = xml.querySelector(".test27:first-of-type")
-        el.checkAttr("id", "test27")
+test "pseudo :not":
+    var el = xml.querySelector(".test18:not(.fake)")
+    check(not el.isNil)
 
-    test "pseudo :last-of-type":
-        let el = xml.querySelector(".test28:last-of-type")
-        el.checkAttr("id", "test28")
+test "attribute start match":
+    var el = xml.querySelector("[data-custom^=\"test19\"]")
+    check(not el.isNil)
 
-    test "pseudo :not + combinator":
-        let el = xml.querySelector(".test29 :not(.fake)")
-        el.checkAttr("id", "test29")
+test "attribute end match":
+    var el = xml.querySelector("[data-custom$=\"test20\"]")
+    check(not el.isNil)
 
-    test "pseudo as only selector":
-        let root = <>span()
-        let el = root.querySelector(":empty")
-        check(not el.isNil)
+test "attribute substring match":
+    var el = xml.querySelector("[data-custom*=\"test21\"]")
+    check(not el.isNil)
 
-    test "find multiple matches":
-        let els = xml.querySelectorAll(".test31")
+test "pseudo :empty":
+    var el = xml.querySelector(".test22-content:empty")
+    check(el.isNil)
+    el = xml.querySelector(".test22-empty:empty")
+    check(not el.isNil)
+
+test "pseudo :only-child":
+    var el = xml.querySelector(".test23-many-siblings:only-child")
+    check(el.isNil)
+    el = xml.querySelector(".test23-one-child:only-child")
+    check(not el.isNil)
+
+test "pseudo :only-of-type":
+    var el = xml.querySelector(".test24-case1:only-of-type")
+    check(el.isNil)
+    el = xml.querySelector(".test24-case2:only-of-type")
+    check(not el.isNil)
+    el = xml.querySelector(".test24-case3:only-of-type")
+    check(not el.isNil)
+
+test "pseudo :first-child":
+    let el = xml.querySelector(".test25:first-child")
+    el.checkAttr("id", "test25")
+
+test "pseudo :last-child":
+    let el = xml.querySelector(".test26:last-child")
+    el.checkAttr("id", "test26")
+
+test "pseudo :first-of-type":
+    let el = xml.querySelector(".test27:first-of-type")
+    el.checkAttr("id", "test27")
+
+test "pseudo :last-of-type":
+    let el = xml.querySelector(".test28:last-of-type")
+    el.checkAttr("id", "test28")
+
+test "pseudo :not + combinator":
+    let el = xml.querySelector(".test29 :not(.fake)")
+    el.checkAttr("id", "test29")
+
+test "pseudo as only selector":
+    let root = <>span()
+    let el = root.querySelector(":empty")
+    check(not el.isNil)
+
+test "find multiple matches":
+    let els = xml.querySelectorAll(".test31")
+    check(els.len == 2)
+    let el = xml.querySelector(".test31")
+    check(not el.isNil)
+
+test "find multiple advanced tree":
+    let els = xml.querySelectorAll(".test32 .test32-wrap p")
+    check(els.len == 2)
+
+test "universal selector":
+    let els = xml.querySelectorAll(".test33 *")
+    check(els.len == 3)
+
+test "pseudo :nth-child odd":
+    let oddQueries = [
+        ".test34:nth-child(odd)",
+        ".test34:nth-child(   odd  )",
+        ".test34:nth-child(2n+1)",
+        ".test34:nth-child(  2n  +  1  )"
+    ]
+
+    for query in oddQueries:
+        let els = xml.querySelectorAll(query)
         check(els.len == 2)
-        let el = xml.querySelector(".test31")
-        check(not el.isNil)
-
-    test "find multiple advanced tree":
-        let els = xml.querySelectorAll(".test32 .test32-wrap p")
-        check(els.len == 2)
-
-    test "universal selector":
-        let els = xml.querySelectorAll(".test33 *")
-        check(els.len == 3)
-
-    test "pseudo :nth-child odd":
-        let oddQueries = [
-            ".test34:nth-child(odd)",
-            ".test34:nth-child(   odd  )",
-            ".test34:nth-child(2n+1)",
-            ".test34:nth-child(  2n  +  1  )"
-        ]
-
-        for query in oddQueries:
-            let els = xml.querySelectorAll(query)
-            check(els.len == 2)
-            let ids = @[els[0].attr("id"), els[1].attr("id")]
-            check("test34-1" in ids)
-            check("test34-3" in ids)
-    
-    test "pseudo :nth-child even":
-        let evenQueries = [
-            ".test34:nth-child(even)",
-            ".test34:nth-child(  even  )",
-            ".test34:nth-child(2n+0)",
-            ".test34:nth-child( 2n  +  0)",
-            ".test34:nth-child(2n)"
-        ]
-
-        for query in evenQueries:
-            let els = xml.querySelectorAll(query)
-            check(els.len == 2)
-            let ids = @[els[0].attr("id"), els[1].attr("id")]
-            check("test34-2" in ids)
-            check("test34-4" in ids)
-
-    test "pseudo :nth-last-child":
-        var els = xml.querySelectorAll(".test34:nth-last-child(odd)")
-        check(els.len == 2)
-        var ids = @[els[0].attr("id"), els[1].attr("id")]
-        check("test34-2" in ids)
-        check("test34-4" in ids)
-
-        els = xml.querySelectorAll(".test34:nth-last-child(even)")
-        check(els.len == 2)
-        ids = @[els[0].attr("id"), els[1].attr("id")]
+        let ids = @[els[0].attr("id"), els[1].attr("id")]
         check("test34-1" in ids)
         check("test34-3" in ids)
 
-    test "pseudo :nth-child no a":
-        let queries = [
-            ".test35:nth-child(0n + 2)",
-            ".test35:nth-child(2)",
-            ".test35:nth-child(+2)",
-            ".test35:nth-child(+0n + 2)",
-            ".test35:nth-child(-0n + 2)"
-        ]
+test "pseudo :nth-child even":
+    let evenQueries = [
+        ".test34:nth-child(even)",
+        ".test34:nth-child(  even  )",
+        ".test34:nth-child(2n+0)",
+        ".test34:nth-child( 2n  +  0)",
+        ".test34:nth-child(2n)"
+    ]
 
-        for query in queries: 
-            let els = xml.querySelectorAll(query)
-            check(els.len == 1)
-            els[0].checkAttr("id", "test35")
+    for query in evenQueries:
+        let els = xml.querySelectorAll(query)
+        check(els.len == 2)
+        let ids = @[els[0].attr("id"), els[1].attr("id")]
+        check("test34-2" in ids)
+        check("test34-4" in ids)
 
-    test "pseudo :nth-child a = 1, no b":
-        let queries = [
-            ".test36:nth-child(1n + 0)",
-            ".test36:nth-child(n + 0)",
-            ".test36:nth-child(n)",
-            ".test36:nth-child(+n)",
-            ".test36"
-        ]
+test "pseudo :nth-last-child":
+    var els = xml.querySelectorAll(".test34:nth-last-child(odd)")
+    check(els.len == 2)
+    var ids = @[els[0].attr("id"), els[1].attr("id")]
+    check("test34-2" in ids)
+    check("test34-4" in ids)
 
-        for query in queries:
-            let els = xml.querySelectorAll(query)
-            check(els.len == 3)
+    els = xml.querySelectorAll(".test34:nth-last-child(even)")
+    check(els.len == 2)
+    ids = @[els[0].attr("id"), els[1].attr("id")]
+    check("test34-1" in ids)
+    check("test34-3" in ids)
 
-    test "pseudo :nth-child negative a":
-        var els = xml.querySelectorAll(".test36:nth-child(-n + 1)")
+test "pseudo :nth-child no a":
+    let queries = [
+        ".test35:nth-child(0n + 2)",
+        ".test35:nth-child(2)",
+        ".test35:nth-child(+2)",
+        ".test35:nth-child(+0n + 2)",
+        ".test35:nth-child(-0n + 2)"
+    ]
+
+    for query in queries: 
+        let els = xml.querySelectorAll(query)
         check(els.len == 1)
-        els = xml.querySelectorAll(".test36:nth-child(-2n + 7)")
-        check(els.len == 2)
+        els[0].checkAttr("id", "test35")
 
-    test "escaping strings":
-        var queries = [
-            r"[id = 'test37\'']",
-            r"[id = 'test37\0027']",
-            r"[id = 'test37\27']",
-            r"[id = '\000074est37\'']",
-            r"[id = '\74 est37\'']",
-            r"[id = '\test37\'']"
-        ]
+test "pseudo :nth-child a = 1, no b":
+    let queries = [
+        ".test36:nth-child(1n + 0)",
+        ".test36:nth-child(n + 0)",
+        ".test36:nth-child(n)",
+        ".test36:nth-child(+n)",
+        ".test36"
+    ]
 
-        for query in queries:
-            var el = xml.querySelector(query)
-            check(not el.isNil)
-        
-        # Escapes are allowed in identifiers as well
-        var el = xml.querySelector(r"#\74 est37\'")
-        check(not el.isNil)
-
-    test "identifier parsing":
-        let disallowedIdentifiers = [
-            "--foo", "-23", "_23"
-        ]
-
-        for ident in disallowedIdentifiers:
-            expect ParseError:
-                discard parseHtmlQuery(ident)
-
-    test "comma operator":
-        var els = xml.querySelectorAll("#test38-first, #test38-second")
-        check(els.len == 2)
-
-    test "comma operator optimizeable":
-        # Use an identical first selector for both comma cases so we trigger optimizations
-        var els = xml.querySelectorAll("div #test38-first, div #test38-second")
-        check(els.len == 2)
-
-    test "Query $":
-        var qStr = $(parseHtmlQuery("div#foobar"))
-        check(qStr == "div[id='foobar']")
-
-        qStr = $(parseHtmlQuery("div > a, div > p"))
-        check(qStr == "div > a, div > p")
-
-    test "Non-ascii identifier":
-        var els = xml.querySelectorAll("#test39 #exämple")
-        check(els.len == 1)
-
-    test "Issue with optimization of roots with different combinators":
-        var els = xml.querySelectorAll("#test40 > div, #test40 span")
-        check(els.len == 2)
-
-    test "Nested pseudos with complex :not(...)":
-        let options = nimqueryDefaultOptions - { optSimpleNot }
-        var els = xml.querySelectorAll("#test41 div:not(.maybe-skip:nth-child(even))", options)
+    for query in queries:
+        let els = xml.querySelectorAll(query)
         check(els.len == 3)
+
+test "pseudo :nth-child negative a":
+    var els = xml.querySelectorAll(".test36:nth-child(-n + 1)")
+    check(els.len == 1)
+    els = xml.querySelectorAll(".test36:nth-child(-2n + 7)")
+    check(els.len == 2)
+
+test "escaping strings":
+    var queries = [
+        r"[id = 'test37-\'']",
+        r"[id = 'test37-\0027']",
+        r"[id = 'test37-\27']",
+        r"[id = '\000074est37-\'']",
+        r"[id = '\000074 est37-\'']",
+        r"[id = '\74 est37-\'']",
+        r"[id = '\test37-\'']",
+        r"[id = 'test37-\ö']"
+    ]
+
+    for query in queries:
+        var el = xml.querySelector(query)
+        check(not el.isNil)
+    
+    # Escapes are allowed in identifiers as well
+    var el = xml.querySelector(r"#\74 est37-\'")
+    check(not el.isNil)
+
+test "identifier parsing":
+    let disallowedIdentifiers = [
+        "--foo", "-23", "_23"
+    ]
+
+    for ident in disallowedIdentifiers:
+        expect ParseError:
+            discard parseHtmlQuery(ident)
+
+test "comma operator":
+    var els = xml.querySelectorAll("#test38-first, #test38-second")
+    check(els.len == 2)
+
+test "comma operator optimizeable":
+    # Use an identical first selector for both comma cases so we trigger optimizations
+    var els = xml.querySelectorAll("div #test38-first, div #test38-second")
+    check(els.len == 2)
+
+test "Query $":
+    var qStr = $(parseHtmlQuery("div#foobar"))
+    check(qStr == "div[id='foobar']")
+
+    qStr = $(parseHtmlQuery("div > a, div > p"))
+    check(qStr == "div > a, div > p")
+
+test "Non-ascii identifier":
+    var els = xml.querySelectorAll("#test39 #exämple")
+    check(els.len == 1)
+
+test "Issue with optimization of roots with different combinators":
+    var els = xml.querySelectorAll("#test40 > div, #test40 span")
+    check(els.len == 2)
+
+test "Nested pseudos with complex :not(...)":
+    let options = nimqueryDefaultOptions - { optSimpleNot }
+    var els = xml.querySelectorAll("#test41 div:not(.maybe-skip:nth-child(even))", options)
+    check(els.len == 3)
+
+test "`+` and `~` combinators":
+    let els = xml.querySelectorAll("#test42 blockquote ~ div + p");
+    check(els.len == 1)
+
+test "numeric class name":
+    expect ParseError:
+        discard parseHtmlQuery(".43")

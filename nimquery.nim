@@ -3,6 +3,8 @@
 # TODO:
 #  - If I change PartialQuery.Combinator to indicate combinator of PartialQuery,
 #    it will simplify a lot of things, including making the comma optimizations better.
+#  - Better case insensitivety. E.g `DIV` should match <div></div>
+#  - Better Whitespace handling (see spec)
 
 import xmltree
 import strutils
@@ -124,7 +126,9 @@ const nimqueryDefaultOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimple
 
 const beginingIdentifiers = Letters + { '-', '\\' }
 const identifiers = Letters + Digits + { '-', '_', '\\' }
-const combinators = { ' ', '+', '~', '>' }
+# NOTE: This is not the same as `strutils.Whitespace`. These values are defined by spec.
+const cssWhitespace = { '\x20', '\x09', '\x0A', '\x0D', '\x0C' }
+const combinators = cssWhitespace + {  '+', '~', '>' }
 
 const pseudoNoParamsKinds = {
     tkPseudoFirstOfType, tkPseudoLastOfType,
@@ -410,11 +414,12 @@ proc readNumerics(input: string, idx: var int, buffer: var string) =
         idx.inc
 
 proc readEscape(input: string, idx: var int, buffer: var string) =
-    const hexInput = HexDigits + { ' ' }
+    const hexInput = HexDigits + cssWhitespace
+
     var codePointStr = ""
     idx.inc
     while input[idx] in hexInput and codePointStr.len < 6:
-        if input[idx] != ' ':
+        if input[idx] notin cssWhitespace:
             codePointStr.add input[idx]
             idx.inc
         else:
@@ -563,7 +568,7 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
                 idx.inc
                 buffer.setLen 0
                 allowSpace = true
-            of ' ':
+            of cssWhitespace:
                 if allowSpace:
                     idx.inc
                 else:
@@ -729,7 +734,7 @@ iterator tokenize(rawInput: string, options: set[NimqueryOption]): tuple[idx: in
             readStringLiteral(input, idx, buffer)
             token = newToken(tkString, buffer)
 
-        of ' ':
+        of cssWhitespace:
             if idx + 1 < input.len and input[idx + 1] notin combinators and
                     isFinishedSimpleSelector(prevToken, prevPrevtoken):
                 token = newToken(tkCombinatorDescendents)
@@ -864,7 +869,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
     of tkAttributeItem:
         return node.hasAttr(demand.attrName) and
             (not demand.attrValue.isNilOrEmpty) and
-            demand.attrValue in node.attr(demand.attrName).split(" ")
+            demand.attrValue in node.attr(demand.attrName).split(cssWhitespace)
     
     # Empty attrValue is allowed,
     # and will match any value starting with '-'

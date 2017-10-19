@@ -204,7 +204,8 @@ template checkAttr(el: XmlNode, attrName, attrValue: string) =
     if not el.isNil:
         check(el.attr(attrName) == attrValue)
     else:
-        check("el is nil" == "")
+        checkpoint("el was nil")
+        fail()
 
 test "id selector":
     let el = xml.querySelector("#test1")

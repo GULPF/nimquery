@@ -3,7 +3,6 @@
 # TODO:
 #  - If I change PartialQuery.Combinator to indicate combinator of PartialQuery,
 #    it will simplify a lot of things, including making the comma optimizations better.
-#  - Better case insensitivety. E.g `DIV` should match <div></div>
 
 import xmltree
 import strutils
@@ -842,7 +841,7 @@ iterator tokenize(rawInput: string, options: set[NimqueryOption]): tuple[idx: in
                 raise newUnexpectedCharacterException($input.runeAt(idx))
 
             if prevToken.isNil or prevToken.kind in combinatorKinds + { tkComma }:
-                token = newToken(tkElement, buffer)
+                token = newToken(tkElement, buffer.toLowerAscii)
             else:
                 token = newToken(tkIdentifier, buffer)
 

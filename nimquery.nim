@@ -27,7 +27,6 @@ type
         tkIdentifier, tkString
 
         tkClass, tkId, tkElement
-        # tkUniversal
 
         tkCombinatorDescendents, tkCombinatorChildren
         tkCombinatorNextSibling, tkCombinatorSiblings
@@ -53,14 +52,14 @@ type
         kind: TokenKind
         value: string
 
-const attributeKinds = {
+const AttributeKinds = {
     tkAttributeExact, tkAttributeItem,
     tkAttributePipe, tkAttributeExists,
     tkAttributeStart, tkAttributeEnd,
     tkAttributeSubstring
 }
 
-const nthKinds = {
+const NthKinds = {
     tkPseudoNthChild, tkPseudoNthLastChild,
     tkPseudoNthOfType, tkPseudoNthLastOfType
 }
@@ -68,9 +67,9 @@ const nthKinds = {
 type
     NilableDemand = ref object
         case kind: Tokenkind
-        of attributeKinds:
+        of AttributeKinds:
             attrName, attrValue: string
-        of nthKinds:
+        of NthKinds:
             a, b: int
         of tkPseudoNot:
             notQuery: PartialQuery
@@ -94,17 +93,15 @@ type
         cmLeaf # Special case for the last query
     
     NimqueryOption* = enum
-        # Assume unique id's or not
-        optUniqueIds 
-        # Allow non-ascii in identifiers (e.g `#exämple`)
-        optUnicodeIdentifiers 
-        # Disallow more complex :not selectors. Annoying but that's the spec.   
-        # Combinators/comma are not allowed even if true.
-        optSimpleNot
+        optUniqueIds          ## Assume unique id's or not
+        optUnicodeIdentifiers ## Allow non-ascii in identifiers (e.g `#exämple`)
+        optSimpleNot          ## Disallow more complex :not selectors. Annoying but that's the spec.   
+                              ## Combinators/comma are not allowed even if true.
 
-    # Because of the comma operator, a query can consist of multiple complete queries.
+    
     Query* = ref object
-        roots: seq[PartialQuery]
+        ## Represents a parsed query. Can be used with `exec(q: Query, xml: XmlNode, single: bool)`.
+        roots: seq[PartialQuery] # Because of the comma operator, a query can consist of multiple complete queries.
         options: set[NimqueryOption]
     
     PartialQuery = ref object
@@ -116,33 +113,34 @@ type
         # Indicates what type of search should be used for `nextQueries`.
         combinator: Combinator
 
-    SearchContext[single: static[bool]] = object
+    SearchContext = object
         options: set[NimqueryOption]
         position: NodeWithParent
         combinator: Combinator
+        single: bool
 
-const nimqueryDefaultOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }
+const NimqueryDefaultOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }
 
 const identifiers = Letters + Digits + { '-', '_', '\\' }
 # NOTE: This is not the same as `strutils.Whitespace`. These values are defined by spec.
-const cssWhitespace = { '\x20', '\x09', '\x0A', '\x0D', '\x0C' }
-const combinators = cssWhitespace + {  '+', '~', '>' }
+const CssWhitespace = { '\x20', '\x09', '\x0A', '\x0D', '\x0C' }
+const Combinators = CssWhitespace + {  '+', '~', '>' }
 
-const pseudoNoParamsKinds = {
+const PseudoNoParamsKinds = {
     tkPseudoFirstOfType, tkPseudoLastOfType,
     tkPseudoOnlyChild, tkPseudoOnlyOfType,
     tkPseudoEmpty, tkPseudoFirstChild,
     tkPseudoLastChild
 }
 
-const combinatorKinds = {
+const CombinatorKinds = {
     tkCombinatorChildren, tkCombinatorDescendents,
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
 proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
 proc `$`(q: PartialQuery): string {. noSideEffect .}
-proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption]): Query
+proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): Query
 
 template log(msg: string): typed =
     when DEBUG:
@@ -207,16 +205,16 @@ proc newPseudoDemand(kind: TokenKind, a, b: int): Demand =
 
 proc `$`(demand: Demand): string =
     case demand.kind:
-    of attributeKinds:
+    of AttributeKinds:
         if demand.kind == tkAttributeExists:
             result = "[" & demand.attrName & "]"
         else:
             result = "[" & demand.attrName & demand.kind.attrComparerString & "'" & demand.attrValue & "']"
     of tkPseudoNot:
         result = ":" & $demand.kind & "(" & $demand.notQuery & ")"
-    of nthKinds:
+    of NthKinds:
         result =  ":" & $demand.kind & "(" & $demand.a & "n, " & $demand.b & ")"
-    of pseudoNoParamsKinds:
+    of PseudoNoParamsKinds:
         result  = ":" & $demand.kind
     of tkElement:
         result = demand.element
@@ -226,9 +224,9 @@ proc `$`(demand: Demand): string =
 proc `==`(d1, d2: Demand): bool =
     if d1.kind != d2.kind: return false
     case d1.kind
-    of attributeKinds:
+    of AttributeKinds:
         return d1.attrName == d2.attrName and d1.attrValue == d2.attrValue
-    of nthKinds:
+    of NthKinds:
         return d1.a == d2.b
     of tkPseudoNot:
         return d1.notQuery == d2.notQuery
@@ -332,7 +330,7 @@ proc canFindMultiple(q: PartialQuery, comb: Combinator, options: set[NimqueryOpt
     # Returns true if the current queries demands can be satisfied by multiple elements.
     # This is used to check if the search should stop after the first element has been found.
     for demand in q.demands:
-        if optUniqueIds in options and demand.kind in attributeKinds and demand.attrName == "id":
+        if optUniqueIds in options and demand.kind in AttributeKinds and demand.attrName == "id":
             return false
         if comb in { cmChildren, cmSiblings } and demand.kind in
                 { tkPseudoFirstOfType, tkPseudoLastOfType,
@@ -399,12 +397,12 @@ proc isValidNotQuery(q: Query, options: set[NimqueryOption]): bool =
         q.roots[0].nextQueries.len == 0 and
         (q.roots[0].demands.len == 1 or not (optSimpleNot in options))
 
-proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: static[bool], opts: set[NimqueryOption]): SearchContext[single] =
-    SearchContext[single](position: pos, combinator: comb, options: opts)
+proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: bool, opts: set[NimqueryOption]): SearchContext =
+    SearchContext(position: pos, combinator: comb, options: opts, single: single)
 
-proc forward[single: static[bool]](ctx: SearchContext[single], pos: NodeWithParent, comb: Combinator): SearchContext[single] =
+proc forward(ctx: SearchContext, pos: NodeWithParent, comb: Combinator): SearchContext =
     # Create the next context state, going forward in the search
-    SearchContext[single](position: pos, combinator: comb, options: ctx.options)
+    SearchContext(position: pos, combinator: comb, options: ctx.options, single: ctx.single)
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
     while input[idx] in Digits:
@@ -434,7 +432,7 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
             idx.inc
     
         # Skip whitespace after hex input
-        if input[idx] in cssWhitespace:
+        if input[idx] in CssWhitespace:
             idx.inc
 
         let runeStr = hexStr.parseHexInt.Rune.toUTF8
@@ -575,7 +573,7 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
                 idx.inc
                 buffer.setLen 0
                 allowSpace = true
-            of cssWhitespace:
+            of CssWhitespace:
                 if allowSpace:
                     idx.inc
                 else:
@@ -646,7 +644,7 @@ proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var
         stack.setLen stack.len - 1
 
     of tkBracketEnd:
-        if stack[^3].kind in attributeKinds - { tkAttributeExists }:
+        if stack[^3].kind in AttributeKinds - { tkAttributeExists }:
             let demand = newAttributeDemand(stack[^3].kind, stack[^4].value, stack[^2].value)
             demandBuffer.add demand
             stack.setLen stack.len - 5
@@ -656,7 +654,7 @@ proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var
             demandBuffer.add demand
             stack.setLen stack.len - 3
 
-    of pseudoNoParamsKinds:
+    of PseudoNoParamsKinds:
         let demand = newPseudoDemand(prev.kind)
         demandBuffer.add demand
         stack.setLen stack.len - 1
@@ -680,7 +678,7 @@ proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var
             demandBuffer.add demand
             stack.setLen stack.len - 2
 
-        of nthKinds:
+        of NthKinds:
             let (a, b) = parsePseudoNthArguments(prev.value)
             let demand = newPseudoDemand(stack[^2].kind, a, b)
             demandBuffer.add demand
@@ -689,7 +687,7 @@ proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand], queryRoot: var
         else:
             raise newException(ParseError, "Unexpected params")
 
-    of combinatorKinds:
+    of CombinatorKinds:
         if stack.len != 1:
             raise newException(ParseError,
                 "Invalid parser state. Expected stack length to be 1. Stack: " & repr(stack))
@@ -715,7 +713,7 @@ proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     # This is needed to determine if a space is significant or not.
     if prev.isNil:
         return false
-    if prev.kind in { tkBracketEnd, tkParam, tkElement } + pseudoNoParamsKinds:
+    if prev.kind in { tkBracketEnd, tkParam, tkElement } + PseudoNoParamsKinds:
         return true
     if prevPrev.isNil:
         return false
@@ -741,8 +739,8 @@ iterator tokenize(rawInput: string, options: set[NimqueryOption]): tuple[idx: in
             readStringLiteral(input, idx, buffer)
             token = newToken(tkString, buffer)
 
-        of cssWhitespace:
-            if idx + 1 < input.len and input[idx + 1] notin combinators and
+        of CssWhitespace:
+            if idx + 1 < input.len and input[idx + 1] notin Combinators and
                     isFinishedSimpleSelector(prevToken, prevPrevtoken):
                 token = newToken(tkCombinatorDescendents)
             else:
@@ -840,7 +838,7 @@ iterator tokenize(rawInput: string, options: set[NimqueryOption]): tuple[idx: in
             if buffer.isNilOrEmpty:
                 raise newUnexpectedCharacterException($input.runeAt(idx))
 
-            if prevToken.isNil or prevToken.kind in combinatorKinds + { tkComma }:
+            if prevToken.isNil or prevToken.kind in CombinatorKinds + { tkComma }:
                 token = newToken(tkElement, buffer.toLowerAscii)
             else:
                 token = newToken(tkIdentifier, buffer)
@@ -876,7 +874,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
     of tkAttributeItem:
         return node.hasAttr(demand.attrName) and
             (not demand.attrValue.isNilOrEmpty) and
-            demand.attrValue in node.attr(demand.attrName).split(cssWhitespace)
+            demand.attrValue in node.attr(demand.attrName).split(CssWhitespace)
     
     # Empty attrValue is allowed,
     # and will match any value starting with '-'
@@ -1019,10 +1017,10 @@ proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var 
                     let nextContext = context.forward(next, queryRoot.combinator)
                     subquery.execRecursive(nextContext, output)
 
-            if not queryRoot.canFindMultiple(context.combinator, context.options): break
-            when context.single:
-                if output.len > 0:
-                    break
+            if context.single and output.len > 0:
+                break
+            if not queryRoot.canFindMultiple(context.combinator, context.options):
+                break
 
     case context.combinator
     of cmDescendants: search(searchDescendants)
@@ -1031,7 +1029,9 @@ proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var 
     of cmNextSibling: search(searchNextSibling)
     of cmLeaf: discard
 
-proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode] =
+proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode] =
+    ## Execute an already parsed query. If `single = true`, it will never return more than one element.
+
     result = newSeq[XmlNode]()
 
     # The <wrapper> element is needed due to how execRecursive is implemented.
@@ -1044,7 +1044,9 @@ proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode] =
         let context = initSearchContext(root, cmDescendants, single, query.options)
         queryRoot.execRecursive(context, result)
 
-proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption]): Query =
+proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): Query =
+    ## Parses a query for later use.  
+    ## Raises `ParseError` if parsing of `queryString` fails.  
     let query = Query(roots: @[])
     var queryRoot: PartialQuery = nil
     var stack = newSeq[Token]()
@@ -1076,25 +1078,17 @@ proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption]): Query =
 
     return query
 
-proc querySelector*(root: XmlNode, queryString: string, options: set[NimqueryOption]): XmlNode =
+proc querySelector*(root: XmlNode, queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): XmlNode =
+    ## Get the first element matching `queryString`, or `nil` if no such element exists.  
+    ## Raises `ParseError` if parsing of `queryString` fails.  
     let query = parseHtmlQuery(queryString, options)
     let lst = query.exec(root, single = true)
     if lst.len > 0:
         return lst[0]
     return nil
 
-proc querySelectorAll*(root: XmlNode, queryString: string, options: set[NimqueryOption]) : seq[XmlNode] =
+proc querySelectorAll*(root: XmlNode, queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions) : seq[XmlNode] =
+    ## Get all elements matching `queryString`.  
+    ## Raises `ParseError` if parsing of `queryString` fails.  
     let query = parseHtmlQuery(queryString, options)
     return query.exec(root, single = false)
-
-# Overloads with default options
-
-proc parseHtmlQuery*(queryString: string): Query =
-    parseHtmlQuery(queryString, nimqueryDefaultOptions)
-
-proc querySelector*(root: XmlNode, queryString: string): XmlNode =
-    querySelector(root, queryString, nimqueryDefaultOptions)
-
-proc querySelectorAll*(root: XmlNode, queryString: string) : seq[XmlNode] =
-    querySelectorAll(root, queryString, nimqueryDefaultOptions)
-    

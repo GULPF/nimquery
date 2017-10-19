@@ -1,23 +1,6 @@
 # nimquery
 A library for querying HTML using CSS selectors, like JavaScripts `document.querySelector`.
 
-Supports all combinators, the comma operator and all [CSS3 selectors](https://www.w3.org/TR/css3-selectors) except the following (most of which have no meaning in a headless context):
-- :root
-- :link
-- :visited
-- :active
-- :hover
-- :focus
-- :target
-- :lang(fr)
-- :enabled
-- :disabled
-- :checked
-- ::first-line 
-- ::first-letter
-- ::before
-- ::after 
-
 ## Usage
 ```nim
 import xmltree
@@ -43,11 +26,28 @@ echo elements
 # => @[<p>1</p>, <p>3</p>]
 ```
 
+## Supported selectors
+Nimquery supports all combinators, the comma operator and all [CSS3 selectors](https://www.w3.org/TR/css3-selectors) except the following (most of which have no meaning in a headless context):
+- :root
+- :link
+- :visited
+- :active
+- :hover
+- :focus
+- :target
+- :lang(...)
+- :enabled
+- :disabled
+- :checked
+- ::first-line 
+- ::first-letter
+- ::before
+- ::after 
+
 ## API
 
 ```nim
-proc querySelectorAll*(XmlNode: root, queryString: string, options: set[NimqueryOption]): seq[XmlNode]
-proc querySelectorAll*(XmlNode: root, queryString: string): seq[XmlNode]
+proc querySelectorAll*(XmlNode: root, queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): seq[XmlNode]
 ```
 Get all elements matching `queryString`.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -56,8 +56,7 @@ See [Options](#options) for information about the `options` parameter.
 - - -
 
 ```nim
-proc querySelector*(XmlNode: root, queryString: string, options: set[NimqueryOption]): XmlNode
-proc querySelector*(XmlNode: root, queryString: string): XmlNode
+proc querySelector*(XmlNode: root, queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): XmlNode
 ```
 Get the first element matching `queryString`, or `nil` if no such element exists.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -66,8 +65,7 @@ See [Options](#options) for information about the `options` parameter.
 - - -
 
 ```nim
-proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption]): Query
-proc parseHtmlQuery*(queryString: string): Query
+proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): Query
 ```
 Parses a query for later use.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -115,4 +113,3 @@ let elements = xml.querySelectorAll("p:not(.maybe-skip:nth-child(even))", option
 echo elements
 # => @[<p>1</p>, <p class="maybe-skip">3</p>, <p>4</p>]
 ```
-

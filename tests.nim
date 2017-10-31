@@ -193,6 +193,13 @@ const html = """
             <div></div>
             <p></p>
         </div>
+
+        <div id="issue1">
+            <p>1</p>
+            <p>2</p>
+            <p>3</p>
+            <p>4</p>
+        </div>
     </body>
 </html>
 """
@@ -526,3 +533,7 @@ test "`+` and `~` combinators":
 test "numeric class name":
     expect ParseError:
         discard parseHtmlQuery(".43")
+
+test "issue1":
+    let els = xml.querySelectorAll("#issue1 p")
+    check($els == "@[<p>1</p>, <p>2</p>, <p>3</p>, <p>4</p>]")

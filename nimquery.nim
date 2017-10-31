@@ -9,6 +9,7 @@ import strutils
 import strtabs
 import unicode
 import math
+import deques
 
 const DEBUG = false
 
@@ -975,16 +976,17 @@ proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
     return true
 
 iterator searchDescendants(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
-    var queue = newSeq[NodeWithParent]()
+    var queue = initDeque[NodeWithParent]()
     for nodeData in position.node.children:
-        queue.add((parent: position.node, index: nodeData.index, elementIndex: nodeData.elementIndex))
+        queue.addLast((parent: position.node, index: nodeData.index, elementIndex: nodeData.elementIndex))
 
     while queue.len > 0:
-        let pair = queue.pop()
+        let pair = queue.popFirst()
         if pair.satisfies queryRoot.demands:
             yield pair
+
         for nodeData in pair.node.children:
-            queue.insert((parent: pair.node, index: nodeData.index, elementIndex: nodeData.elementIndex), 0)
+            queue.addLast((parent: pair.node, index: nodeData.index, elementIndex: nodeData.elementIndex))
 
 iterator searchChildren(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
     for pair in position.node.children:

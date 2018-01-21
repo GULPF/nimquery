@@ -1036,23 +1036,28 @@ proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var 
     of cmNextSibling: search(searchNextSibling)
     of cmLeaf: discard
 
-proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode] =
-    ## Execute an already parsed query. If `single = true`, it will never return more than one element.
+# Due to the extreme fragility of static[T], I've resorted to only
+# using {.dirty.} templates from static[T] procs, never anything else.
+# This of course causes an extremely fragile implementation, but at
+# least it looks OK from the outside.
+# The static[T] overloads still doesn't fully work, but hopefully the
+# situation will improve...
 
-    result = newSeq[XmlNode]()
+template execImpl(): untyped {.dirty.} =
+    var lst = newSeq[XmlNode]()
 
     # The <wrapper> element is needed due to how execRecursive is implemented.
     # The "current" position is never matched against, only the childs/siblings (depending on combinator).
     # So to make sure that the original root is tested, we need to set the starting position
     # to an imaginary wrapper element.
     # Since `NodeWIthParent` always require a parent, we also add a wrapper-root element.
-    let root = (parent: <>"wrapper-root"(<>wrapper(root)), index: 0, elementIndex: 0).NodeWithParent
+    let wRoot = (parent: <>"wrapper-root"(<>wrapper(root)), index: 0, elementIndex: 0)
     for queryRoot in query.roots:
-        let context = initSearchContext(root, cmDescendants, single, query.options)
-        queryRoot.execRecursive(context, result)
+        let context = initSearchContext(wRoot, cmDescendants, single, query.options)
+        queryRoot.execRecursive(context, lst)
+    lst
 
-proc parseHtmlQuery*(queryString: string,
-        options: set[QueryOption] = DefaultQueryOptions): Query =
+template parseHtmlQueryImpl(): untyped {.dirty.} =
     ## Parses a query for later use.  
     ## Raises `ParseError` if parsing of `queryString` fails.  
     var query = Query(roots: @[])
@@ -1084,21 +1089,67 @@ proc parseHtmlQuery*(queryString: string,
     log "\ninput: \n" & queryString
     log "\nquery: \n" & query.debugToString
 
-    return query
+    query
+
+template querySelectorImpl(): untyped {.dirty.} =
+    discard parseHtmlQueryImpl
+    const single = true
+    discard execImpl()
+    if lst.len > 0:
+        lst[0]
+    else:
+        nil
+
+template querySelectorAllImpl*(): untyped {.dirty.} =
+    discard parseHtmlQueryImpl
+    const single = false
+    discard execImpl
+    lst
+
+template DQO: untyped = DefaultQueryOptions
+
+proc exec*(query: Query, root: XmlNode,
+        single: bool): seq[XmlNode] =
+    ## Execute an already parsed query. If `single = true`, it will never return more than one element.
+    execImpl()
+
+proc parseHtmlQuery*(queryString: string,
+        options: set[QueryOption] = DQO): Query =
+    ## Parses a query for later use.  
+    ## Raises `ParseError` if parsing of `queryString` fails.  
+    parseHtmlQueryImpl
 
 proc querySelector*(root: XmlNode, queryString: string,
-        options: set[QueryOption] = DefaultQueryOptions): XmlNode =
+        options: set[QueryOption] = DQO): XmlNode =
     ## Get the first element matching `queryString`, or `nil` if no such element exists.  
     ## Raises `ParseError` if parsing of `queryString` fails.  
-    let query = parseHtmlQuery(queryString, options)
-    let lst = query.exec(root, single = true)
-    if lst.len > 0:
-        return lst[0]
-    return nil
+    querySelectorImpl
 
 proc querySelectorAll*(root: XmlNode, queryString: string,
-        options: set[QueryOption] = DefaultQueryOptions) : seq[XmlNode] =
+        options: set[QueryOption] = DQO): seq[XmlNode] =
     ## Get all elements matching `queryString`.  
     ## Raises `ParseError` if parsing of `queryString` fails.  
-    let query = parseHtmlQuery(queryString, options)
-    return query.exec(root, single = false)
+    querySelectorAllImpl
+
+# template validateQueryDefault() {.dirty.} =
+#     static:
+#         try:
+#             discard parseHtmlQuery(queryString, { optUniqueIds, optUnicodeIdentifiers, optSimpleNot })
+#             const valid {.used.} = true
+#         except ParseError: discard
+
+# proc querySelector*(root: XmlNode, queryString: static[string]): XmlNode =
+#     ## Overload that validates `queryString` at compile time.
+#     let options = DQO
+#     querySelectorImpl
+
+# proc querySelectorAll*(root: XmlNode, queryString: static[string]): seq[XmlNode] =
+#     ## Overload that validates `queryString` at compile time.    
+#     let options = DQO
+#     querySelectorAllImpl
+
+# proc parseHtmlQuery*(queryString: static[string]): Query =
+#     ## Overload that validates `queryString` at compile time.    
+#     let options = DQO
+#     parseHtmlQueryImpl
+

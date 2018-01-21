@@ -17,6 +17,8 @@ type
     ParseError* = object of Exception
 
     TokenKind = enum
+        tkInvalid
+
         tkBracketStart, tkBracketEnd
         tkParam
         tkComma
@@ -49,7 +51,9 @@ type
 
         tkPseudoNot
 
-    Token = ref object
+        tkEoi # End of input
+
+    Token = object
         kind: TokenKind
         value: string
 
@@ -66,7 +70,7 @@ const NthKinds = {
 }
 
 type
-    NilableDemand = ref object
+    Demand = object
         case kind: Tokenkind
         of AttributeKinds:
             attrName, attrValue: string
@@ -77,8 +81,6 @@ type
         of tkElement:
             element: string
         else: discard
-
-    Demand = NilableDemand not nil
 
     NodeWithParent = tuple
         parent: XmlNode
@@ -92,19 +94,18 @@ type
         cmNextSibling = tkCombinatorNextSibling,
         cmSiblings = tkCombinatorSiblings,
         cmLeaf # Special case for the last query
-    
+
     QueryOption* = enum
         optUniqueIds          ## Assume unique id's or not
         optUnicodeIdentifiers ## Allow non-ascii in identifiers (e.g `#exämple`)
-        optSimpleNot          ## Disallow more complex :not selectors. Annoying but that's the spec.   
+        optSimpleNot          ## Disallow more complex :not selectors. Annoying but that's the spec.
                               ## Combinators/comma are not allowed even if true.
 
-    
     Query* = object
         ## Represents a parsed query. Can be used with `exec(q: Query, xml: XmlNode, single: bool)`.
         roots: seq[PartialQuery] # Because of the comma operator, a query can consist of multiple complete queries.
         options: set[QueryOption]
-    
+
     PartialQuery = ref object
         # `nextQueries` will never contain more than one element while parsing.
         # It's used in `optimize(q: Query)` to partialy merge similiar queries.
@@ -136,6 +137,8 @@ const PseudoNoParamsKinds = {
     tkPseudoEmpty, tkPseudoFirstChild,
     tkPseudoLastChild
 }
+
+const PseudoParamsKinds = NthKinds + { tkPseudoNot }
 
 const CombinatorKinds = {
     tkCombinatorChildren, tkCombinatorDescendents,
@@ -189,21 +192,24 @@ proc newUnexpectedCharacterException(s: string): ref ParseError =
 proc newUnexpectedCharacterException(c: char): ref ParseError =
     newUnexpectedCharacterException($c)
 
-proc newDemand(kind: static[TokenKind], notQuery: PartialQuery): Demand =
+proc newParseException(q: string): ref ParseError =
+    return newException(ParseError, "Failed to parse HTML query '" & q & "'")
+
+proc initDemand(kind: static[TokenKind], notQuery: PartialQuery): Demand =
     return Demand(kind: kind, notQuery: notQuery)
 
-proc newDemand(kind: static[TokenKind], element: string): Demand =
+proc initDemand(kind: static[TokenKind], element: string): Demand =
     return Demand(kind: kind, element: element)
 
-proc newPseudoDemand(kind: TokenKind): Demand =
+proc initPseudoDemand(kind: TokenKind): Demand =
     result = Demand(kind: tkPseudoFirstOfType)
     result.kind = kind
 
-proc newAttributeDemand(kind: TokenKind, attrName, attrValue: string): Demand =
+proc initAttributeDemand(kind: TokenKind, attrName, attrValue: string): Demand =
     result = Demand(kind: tkAttributeExists, attrName: attrName, attrValue: attrValue)
     result.kind = kind
 
-proc newPseudoDemand(kind: TokenKind, a, b: int): Demand =
+proc initPseudoDemand(kind: TokenKind, a, b: int): Demand =
     result = Demand(kind: tkPseudoNthChild, a: a, b: b)
     result.kind = kind
 
@@ -249,13 +255,10 @@ iterator children(node: XmlNode, offset: NodeWithParent = (nil, -1, -1)): NodeWi
             elIdx.inc
         idx.inc
 
-proc newToken(kind: static[TokenKind], value: string = ""): Token =
+proc initToken(kind: static[TokenKind], value: string = ""): Token =
     return Token(kind: kind, value: value)
 
 proc `$`(token: Token): string =
-    if token.isNil:
-        return "[nil]"
-
     result = "[" & $token.kind
     if not token.value.isNilOrEmpty:
         result.add " : " & token.value & "]"
@@ -275,7 +278,7 @@ proc debugToString(q: PartialQuery): string =
 
     if q.nextQueries.len > 0:
         result.add "\n\t"
-        
+
         var joined = ""
         for idx, part in q.nextQueries:
             joined.add part.debugToString
@@ -286,7 +289,7 @@ proc debugToString(q: PartialQuery): string =
 proc rootStrings(q: PartialQuery): seq[string] =
     var common = ""
     var current = q
-    
+
     common.add current.demands.join("")
     common.add $current.combinator
 
@@ -330,7 +333,7 @@ proc append(q: var PartialQuery, demands: seq[Demand], combinator: Combinator) =
             itr = itr.nextQueries[0]
         itr.nextQueries = @[ newPartialQuery(demands, combinator) ]
 
-proc canFindMultiple(q: PartialQuery, comb: Combinator, options: set[QueryOption]): bool = 
+proc canFindMultiple(q: PartialQuery, comb: Combinator, options: set[QueryOption]): bool =
     # Returns true if the current queries demands can be satisfied by multiple elements.
     # This is used to check if the search should stop after the first element has been found.
     for demand in q.demands:
@@ -360,7 +363,7 @@ proc optimize(query: var Query) =
     # E.g in the query `div p, div a` all div elements only needs to be found once.
     #
     # This implementation is not perfect, but it might be good enough.
-    # It prioritizes merging roots to the start of the root list, 
+    # It prioritizes merging roots to the start of the root list,
     # which is arbitrary (but predictable).
     # The best optimization is dependent on the structure of the HTML
     # document being queried anyway so I don't think it matters.
@@ -377,7 +380,7 @@ proc optimize(query: var Query) =
 
     while mergeToIdx < high(query.roots):
         if isIdenticalRoot(query.roots[mergeFromIdx], query.roots[mergeToIdx]):
-            
+
             var qFrom = query.roots[mergeFromIdx]
             var qTo = query.roots[mergeToIdx]
 
@@ -420,7 +423,7 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
     # Linefeed, carriage return and form feed can't be escaped.
     if input[idx] in { '\x0C', '\x0D', '\x0A'}:
         raise newUnexpectedCharacterException(input[idx])
-    
+
     # No special handling is required for these. E.g '\n' means 'n', not 'newline'.
     if input[idx] notin HexDigits:
         # FIXME: Should this read a grapheme instead of a rune? I don't know
@@ -434,7 +437,7 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
         while input[idx] in HexDigits and hexStr.len < 6:
             hexStr.add input[idx]
             idx.inc
-    
+
         # Skip whitespace after hex input
         if input[idx] in CssWhitespace:
             idx.inc
@@ -487,7 +490,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
         if rune == '\\'.Rune:
             readEscape(input, idx, buffer)
         else:
-            let unicodeCh = $rune    
+            let unicodeCh = $rune
             idx.inc unicodeCh.len
             buffer.add unicodeCh
 
@@ -548,7 +551,7 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
 
         # NOTE: Spacing between first sign and `a` is not allowed.
         while idx < input.len:
-            
+
             var allowSpace = true
 
             case input[idx]
@@ -559,7 +562,7 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
                 idx.inc
             of Digits:
                 readNumerics input, idx, buffer
-                
+
                 if input[idx] == 'n':
                     if not a.isNilOrEmpty:
                         raise newUnexpectedCharacterException(input[idx])
@@ -584,154 +587,57 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
                     raise newUnexpectedCharacterException(input[idx])
             else:
                 raise newUnexpectedCharacterException(input[idx])
-        
+
         if a.isNilOrEmpty: a = "0"
         if b.isNilOrEmpty: b = "0"
         # Should be safe to parse
         return (a.parseInt, b.parseInt)
-        
-proc newPseudoToken(str: string): Token =
+
+proc initPseudoToken(str: string): Token =
+    # XXX: Replace this with parseEnum?
     case str
     of ":empty":
-        return newToken(tkPseudoEmpty)
+        return initToken(tkPseudoEmpty)
     of ":only-child":
-        return newToken(tkPseudoOnlyChild)
+        return initToken(tkPseudoOnlyChild)
     of ":only-of-type":
-        return newToken(tkPseudoOnlyOfType)
+        return initToken(tkPseudoOnlyOfType)
     of ":first-child":
-        return newToken(tkPseudoFirstChild)
+        return initToken(tkPseudoFirstChild)
     of ":last-child":
-        return newToken(tkPseudoLastChild)
+        return initToken(tkPseudoLastChild)
     of ":last-of-type":
-        return newToken(tkPseudoLastOfType)
+        return initToken(tkPseudoLastOfType)
     of ":first-of-type":
-        return newToken(tkPseudoFirstOfType)
+        return initToken(tkPseudoFirstOfType)
     of ":not":
-        return newToken(tkPseudoNot)
+        return initToken(tkPseudoNot)
     of ":nth-child":
-        return newToken(tkPseudoNthChild)
+        return initToken(tkPseudoNthChild)
     of ":nth-last-child":
-        return newToken(tkPseudoNthLastChild)
+        return initToken(tkPseudoNthLastChild)
     of ":nth-of-type":
-        return newToken(tkPseudoNthOfType)
+        return initToken(tkPseudoNthOfType)
     of ":nth-last-of-type":
-        return newToken(tkPseudoNthLastOfType)
+        return initToken(tkPseudoNthLastOfType)
     else:
         raise newException(ParseError, "Unknown pseudo: " & str)
 
-proc reduce(stack: var seq[Token], demandBuffer: var seq[Demand],
-            queryRoot: var PartialQuery, query: var Query,
-            options: set[QueryOption]) =
-    if stack.len == 0:
-        return
-
-    let peek = high(stack)
-    let prev = stack[peek]
-
-    case prev.kind
-
-    of tkIdentifier:
-        if stack.len == 1:
-            raise newException(ParseError, "Unexpected identifier: " & prev.value)
-
-        elif stack[^2].kind == tkClass:
-            let demand = newAttributeDemand(tkAttributeItem, "class", prev.value)
-            demandBuffer.add demand
-            stack.setLen stack.len - 2
-
-        elif stack[^2].kind == tkId:
-            let demand = newAttributeDemand(tkAttributeExact, "id", prev.value)
-            demandBuffer.add demand
-            stack.setLen stack.len - 2
-
-    of tkElement:
-        let demand = newDemand(tkElement, prev.value)
-        demandBuffer.add demand
-        stack.setLen stack.len - 1
-
-    of tkBracketEnd:
-        if stack[^3].kind in AttributeKinds - { tkAttributeExists }:
-            let demand = newAttributeDemand(stack[^3].kind, stack[^4].value, stack[^2].value)
-            demandBuffer.add demand
-            stack.setLen stack.len - 5
-
-        else:
-            let demand = newAttributeDemand(tkAttributeExists, stack[^2].value, "")
-            demandBuffer.add demand
-            stack.setLen stack.len - 3
-
-    of PseudoNoParamsKinds:
-        let demand = newPseudoDemand(prev.kind)
-        demandBuffer.add demand
-        stack.setLen stack.len - 1
-
-    of tkParam:
-        # It's bit inelegant to do parsing of pseudo arguments here,
-        # but since there are only two types of pseudo arguments,
-        # I think it's fine.
-
-        case stack[^2].kind
-
-        of tkPseudoNot:
-            # Not the cleanest way to this, but eh
-            let notQuery = parseHtmlQuery(prev.value, options)
-
-            if not notQuery.isValidNotQuery(options):
-                raise newException(ParseError,
-                    ":not argument must be a simple selector. Was: " & repr(notQuery))
-            
-            let demand = newDemand(tkPseudoNot, notQuery.roots[0])
-            demandBuffer.add demand
-            stack.setLen stack.len - 2
-
-        of NthKinds:
-            let (a, b) = parsePseudoNthArguments(prev.value)
-            let demand = newPseudoDemand(stack[^2].kind, a, b)
-            demandBuffer.add demand
-            stack.setLen stack.len - 2
-
-        else:
-            raise newException(ParseError, "Unexpected params")
-
-    of CombinatorKinds:
-        if stack.len != 1:
-            raise newException(ParseError,
-                "Invalid parser state. Expected stack length to be 1. Stack: " & repr(stack))
-
-        let combinator = prev.kind.Combinator
-        queryRoot.append demandBuffer, combinator
-        stack = @[]
-        demandBuffer = @[]
-
-    of tkComma:
-        if stack.len != 1:
-            raise newUnexpectedCharacterException(',')
-        queryRoot.append demandBuffer, cmLeaf
-        query.roots.add queryRoot
-        stack = @[]
-        demandBuffer = @[]
-        queryRoot = nil
-
-    else: discard
-
 proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
-    # Checks if the last two tokens represents the end of a simple selector. 
+    # Checks if the last two tokens represents the end of a simple selector.
     # This is needed to determine if a space is significant or not.
-    if prev.isNil:
-        return false
     if prev.kind in { tkBracketEnd, tkParam, tkElement } + PseudoNoParamsKinds:
         return true
-    if prevPrev.isNil:
-        return false
     if prev.kind == tkIdentifier and prevPrev.kind in { tkClass, tkId }:
         return true
 
-iterator tokenize(rawInput: string, options: set[QueryOption]): tuple[idx: int, token: Token] =
+iterator tokenize(rawInput: string,
+                  options: set[QueryOption]): Token {.closure.} =
     let input = rawInput.strip
-    var idx = 0
-    var prevToken : Token
-    var prevPrevtoken : Token
+    var prevToken: Token
+    var prevPrevtoken: Token
     var skip = false
+    var idx = 0
 
     while idx < input.len:
         let ch = input[idx]
@@ -743,39 +649,39 @@ iterator tokenize(rawInput: string, options: set[QueryOption]): tuple[idx: int, 
         of { '"', '\'' }:
             var buffer = ""
             readStringLiteral(input, idx, buffer)
-            token = newToken(tkString, buffer)
+            token = initToken(tkString, buffer)
 
         of CssWhitespace:
             if idx + 1 < input.len and input[idx + 1] notin Combinators and
                     isFinishedSimpleSelector(prevToken, prevPrevtoken):
-                token = newToken(tkCombinatorDescendents)
+                token = initToken(tkCombinatorDescendents)
             else:
                 skip = true
 
             idx.inc
-    
+
         of '~':
             if input.safeCharCompare(idx + 1, '='):
-                token = newToken(tkAttributeItem)
+                token = initToken(tkAttributeItem)
                 idx.inc 2
             else:
-                token = newToken(tkCombinatorSiblings)
+                token = initToken(tkCombinatorSiblings)
                 idx.inc
 
         of '+':
-            token = newToken(tkCombinatorNextSibling)
+            token = initToken(tkCombinatorNextSibling)
             idx.inc
 
         of '>':
-            token = newToken(tkCombinatorChildren)
+            token = initToken(tkCombinatorChildren)
             idx.inc
 
         of '[':
-            token = newToken(tkBracketStart)
+            token = initToken(tkBracketStart)
             idx.inc
 
         of ']':
-            token = newToken(tkBracketEnd)
+            token = initToken(tkBracketEnd)
             idx.inc
 
         of ':':
@@ -786,55 +692,55 @@ iterator tokenize(rawInput: string, options: set[QueryOption]): tuple[idx: int, 
                 buffer.add input[idx]
                 idx.inc
 
-            token = newPseudoToken(buffer)
+            token = initPseudoToken(buffer)
 
         of '#':
             idx.inc
-            token = newToken(tkId)
-        
+            token = initToken(tkId)
+
         of '.':
             idx.inc
-            token = newToken(tkClass)
+            token = initToken(tkClass)
 
         of '*':
             if input.safeCharCompare(idx + 1, '='):
-                token = newToken(tkAttributeSubstring)
+                token = initToken(tkAttributeSubstring)
                 idx.inc 2
             else:
                 idx.inc
                 # No need to emit since tkUniversal matches everything?
-                # token = newToken(tkUniversal)
+                # token = initToken(tkUniversal)
                 skip = true
 
         of '(':
             var buffer = ""
             readParams(input, idx, buffer)
-            token = newToken(tkParam, buffer)
+            token = initToken(tkParam, buffer)
 
         of '=':
-            token = newToken(tkAttributeExact)
+            token = initToken(tkAttributeExact)
             idx.inc
 
         of '|':
             if input.safeCharCompare(idx + 1, '='):
-                token = newToken(tkAttributePipe)
+                token = initToken(tkAttributePipe)
                 idx.inc 2
 
         of '^':
             if input.safeCharCompare(idx + 1, '='):
-                token = newToken(tkAttributeStart)
+                token = initToken(tkAttributeStart)
                 idx.inc 2
 
         of '$':
             if input.safeCharCompare(idx + 1, '='):
-                token = newToken(tkAttributeEnd)
+                token = initToken(tkAttributeEnd)
                 idx.inc 2
 
         of ',':
-            token = newToken(tkComma)
+            token = initToken(tkComma)
             idx.inc
 
-        else: 
+        else:
             var buffer = ""
             if optUnicodeIdentifiers in options:
                 readIdentifier(input, idx, buffer)
@@ -844,27 +750,30 @@ iterator tokenize(rawInput: string, options: set[QueryOption]): tuple[idx: int, 
             if buffer.isNilOrEmpty:
                 raise newUnexpectedCharacterException($input.runeAt(idx))
 
-            if prevToken.isNil or prevToken.kind in CombinatorKinds + { tkComma }:
-                token = newToken(tkElement, buffer.toLowerAscii)
+            if prevToken.kind in CombinatorKinds + { tkComma, tkInvalid }:
+                token = initToken(tkElement, buffer.toLowerAscii)
             else:
-                token = newToken(tkIdentifier, buffer)
+                token = initToken(tkIdentifier, buffer)
 
         if not skip:
-            if token.isNil:
+            if token.kind == tkInvalid:
                 raise newUnexpectedCharacterException(ch)
 
             # TODO: It might be wise to perform some validation here.
             #       e.g tkParam is only valid after tkPseudoNot tkPseudoNth*
             prevPrevtoken = prevToken
             prevToken = token
-            yield (idx, token)
+            yield token
         else:
             skip = false
+
+    while true:
+        yield initToken(tkEoi)
 
 proc hasAttr(node: XmlNode, attr: string): bool {. inline .} =
     return not node.attrs.isNil and node.attrs.hasKey(attr)
 
-proc validateNth(a, b, nSiblings: int): bool = 
+proc validateNth(a, b, nSiblings: int): bool =
     if a == 0:
         return nSiblings == b - 1
     let n = (nSiblings - (b - 1)) / a
@@ -881,7 +790,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
         return node.hasAttr(demand.attrName) and
             (not demand.attrValue.isNilOrEmpty) and
             demand.attrValue in node.attr(demand.attrName).split(CssWhitespace)
-    
+
     # Empty attrValue is allowed,
     # and will match any value starting with '-'
     of tkAttributePipe:
@@ -890,7 +799,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
 
     of tkAttributeExact:
         return node.attr(demand.attrName) == demand.attrValue
-    
+
     of tkAttributeStart:
         return not demand.attrValue.isNilOrEmpty and
             node.attr(demand.attrName).startsWith(demand.attrValue)
@@ -902,7 +811,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
     of tkAttributeSubstring:
         return not demand.attrValue.isNilOrEmpty and
             node.attr(demand.attrName) in demand.attrValue
-    
+
     of tkElement:
         return node.tag == demand.element
 
@@ -929,7 +838,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
         for siblingPair in pair.parent.children(offset = pair):
             return false
         return true
-    
+
     of tkPseudoFirstOfType:
         for siblingPair in pair.parent.children:
             if siblingPair.node.tag == node.tag:
@@ -998,7 +907,7 @@ iterator searchChildren(queryRoot: PartialQuery, position: NodeWithParent): Node
         if pair.satisfies queryRoot.demands:
             yield pair
 
-iterator searchSiblings(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent = 
+iterator searchSiblings(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
     for pair in position.parent.children(offset = position):
         if pair.satisfies queryRoot.demands:
             yield pair
@@ -1006,7 +915,7 @@ iterator searchSiblings(queryRoot: PartialQuery, position: NodeWithParent): Node
 iterator searchNextSibling(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
     # It's a bit silly to have an iterator which will only yield 0 or 1 element,
     # but it's nice for consistency with how the other combinators are implemented.
-    
+
     for pair in position.parent.children(offset = position):
         if pair.satisfies queryRoot.demands:
             yield pair
@@ -1036,15 +945,12 @@ proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var 
     of cmNextSibling: search(searchNextSibling)
     of cmLeaf: discard
 
-# Due to the extreme fragility of static[T], I've resorted to only
-# using {.dirty.} templates from static[T] procs, never anything else.
-# This of course causes an extremely fragile implementation, but at
-# least it looks OK from the outside.
-# The static[T] overloads still doesn't fully work, but hopefully the
-# situation will improve...
+template DQO: untyped = DefaultQueryOptions
 
-template execImpl(): untyped {.dirty.} =
-    var lst = newSeq[XmlNode]()
+proc exec*(query: Query, root: XmlNode,
+        single: bool): seq[XmlNode] =
+    ## Execute an already parsed query. If `single = true`, it will never return more than one element.
+    result = newSeq[XmlNode]()
 
     # The <wrapper> element is needed due to how execRecursive is implemented.
     # The "current" position is never matched against, only the childs/siblings (depending on combinator).
@@ -1054,32 +960,106 @@ template execImpl(): untyped {.dirty.} =
     let wRoot = (parent: <>"wrapper-root"(<>wrapper(root)), index: 0, elementIndex: 0)
     for queryRoot in query.roots:
         let context = initSearchContext(wRoot, cmDescendants, single, query.options)
-        queryRoot.execRecursive(context, lst)
-    lst
+        queryRoot.execRecursive(context, result)
 
-template parseHtmlQueryImpl(): untyped {.dirty.} =
-    ## Parses a query for later use.  
-    ## Raises `ParseError` if parsing of `queryString` fails.  
+proc parseHtmlQuery*(queryString: string,
+        options: set[QueryOption] = DQO): Query =
+    ## Parses a query for later use.
+    ## Raises `ParseError` if parsing of `queryString` fails.
     var query = Query(roots: @[])
     var queryRoot: PartialQuery = nil
-    var stack = newSeq[Token]()
     var demandBuffer = newSeq[Demand]()
 
-    template printDebug(token: string) =
-        log "token: " & $token
-        log "stack: " & $stack
-        log "demands: " & $demandBuffer
-        log "* * *"
+    let itr: iterator(s: string, o: set[QueryOption]): Token = tokenize
+    var c: Token
+    var n: Token
 
-    for idx, token in tokenize(queryString, options):
-        printDebug($token)
-        stack.add token
-        reduce(stack, demandBuffer, queryRoot, query, options)
+    template forward =
+        # NOTE: `tokenize` goes on forever so no need for `finished`
+        c = n
+        n = itr(queryString, options)
 
-    printDebug("n/a")
+    proc eat(kind: set[TokenKind]): Token =
+        if n.kind notin kind:
+            raise newParseException(queryString)
+        forward()
+        c
 
-    if stack.len > 0:
-        raise newException(ParseError, "Unexpected end of input")
+    template eat(kind: TokenKind): Token = eat({ kind })
+
+    forward()
+    forward()
+
+    while true:
+        case c.kind
+
+        of tkClass:
+            demandBuffer.add initAttributeDemand(tkAttributeItem, "class",
+                eat(tkIdentifier).value)
+
+        of tkId:
+            demandBuffer.add initAttributeDemand(tkAttributeExact, "id",
+                eat(tkIdentifier).value)
+
+        of tkElement:
+            demandBuffer.add initDemand(tkElement, c.value)
+
+        of tkBracketStart:
+            let f = eat(tkIdentifier)
+            let nkind = n.kind
+            case nkind
+            of AttributeKinds - { tkAttributeExists }:
+                discard eat(nkind)
+                let v = eat({ tkIdentifier, tkString })
+                demandBuffer.add initAttributeDemand(nkind, f.value, v.value)
+                discard eat(tkBracketEnd)
+            of tkBracketEnd:
+                demandBuffer.add initAttributeDemand(tkAttributeExists,
+                    f.value, "")
+                discard eat(tkBracketEnd)
+            else:
+                raise newParseException(queryString)
+
+        of PseudoNoParamsKinds:
+            demandBuffer.add initPseudoDemand(c.kind)
+
+        of PseudoParamsKinds:
+            let pseudoKind = c.kind
+            let params = eat(tkParam)
+            case pseudoKind
+            of tkPseudoNot:
+                # Not the cleanest way to this, but eh
+                let notQuery = parseHtmlQuery(params.value, options)
+
+                if not notQuery.isValidNotQuery(options):
+                    raise newException(ParseError,
+                        ":not argument must be a simple selector, but " &
+                        "was '" & params.value & "'")
+
+                demandBuffer.add initDemand(tkPseudoNot, notQuery.roots[0])
+            of NthKinds:
+                let (a, b) = parsePseudoNthArguments(params.value)
+                demandBuffer.add initPseudoDemand(pseudoKind, a, b)
+            else: doAssert(false) # can't happen
+
+        of CombinatorKinds:
+            queryRoot.append demandBuffer, c.kind.Combinator
+            demandBuffer = @[]
+
+        of tkComma:
+            queryRoot.append demandBuffer, cmLeaf
+            query.roots.add queryRoot
+            demandBuffer = @[]
+            queryRoot = nil
+
+        of tkIdentifier, tkString, tkBracketEnd,
+                tkParam, tkInvalid, AttributeKinds:
+            raise newParseException(queryString)
+
+        of tkEoi:
+            break
+
+        forward()
 
     queryRoot.append demandBuffer, cmLeaf
     query.roots.add queryRoot
@@ -1091,65 +1071,20 @@ template parseHtmlQueryImpl(): untyped {.dirty.} =
 
     query
 
-template querySelectorImpl(): untyped {.dirty.} =
-    discard parseHtmlQueryImpl
-    const single = true
-    discard execImpl()
+proc querySelector*(root: XmlNode, queryString: string,
+        options: set[QueryOption] = DQO): XmlNode =
+    ## Get the first element matching `queryString`, or `nil` if no such element exists.
+    ## Raises `ParseError` if parsing of `queryString` fails.
+    let query = parseHtmlQuery(queryString, options)
+    let lst = query.exec(root, single = true)
     if lst.len > 0:
         lst[0]
     else:
         nil
 
-template querySelectorAllImpl*(): untyped {.dirty.} =
-    discard parseHtmlQueryImpl
-    const single = false
-    discard execImpl
-    lst
-
-template DQO: untyped = DefaultQueryOptions
-
-proc exec*(query: Query, root: XmlNode,
-        single: bool): seq[XmlNode] =
-    ## Execute an already parsed query. If `single = true`, it will never return more than one element.
-    execImpl()
-
-proc parseHtmlQuery*(queryString: string,
-        options: set[QueryOption] = DQO): Query =
-    ## Parses a query for later use.  
-    ## Raises `ParseError` if parsing of `queryString` fails.  
-    parseHtmlQueryImpl
-
-proc querySelector*(root: XmlNode, queryString: string,
-        options: set[QueryOption] = DQO): XmlNode =
-    ## Get the first element matching `queryString`, or `nil` if no such element exists.  
-    ## Raises `ParseError` if parsing of `queryString` fails.  
-    querySelectorImpl
-
 proc querySelectorAll*(root: XmlNode, queryString: string,
         options: set[QueryOption] = DQO): seq[XmlNode] =
-    ## Get all elements matching `queryString`.  
-    ## Raises `ParseError` if parsing of `queryString` fails.  
-    querySelectorAllImpl
-
-# template validateQueryDefault() {.dirty.} =
-#     static:
-#         try:
-#             discard parseHtmlQuery(queryString, { optUniqueIds, optUnicodeIdentifiers, optSimpleNot })
-#             const valid {.used.} = true
-#         except ParseError: discard
-
-# proc querySelector*(root: XmlNode, queryString: static[string]): XmlNode =
-#     ## Overload that validates `queryString` at compile time.
-#     let options = DQO
-#     querySelectorImpl
-
-# proc querySelectorAll*(root: XmlNode, queryString: static[string]): seq[XmlNode] =
-#     ## Overload that validates `queryString` at compile time.    
-#     let options = DQO
-#     querySelectorAllImpl
-
-# proc parseHtmlQuery*(queryString: static[string]): Query =
-#     ## Overload that validates `queryString` at compile time.    
-#     let options = DQO
-#     parseHtmlQueryImpl
-
+    ## Get all elements matching `queryString`.
+    ## Raises `ParseError` if parsing of `queryString` fails.
+    let query = parseHtmlQuery(queryString, options)
+    result = query.exec(root, single = false)

@@ -1,8 +1,9 @@
 # Spec: https://www.w3.org/TR/css3-selectors/
 
 # TODO:
-#  - If I change PartialQuery.Combinator to indicate combinator of PartialQuery,
-#    it will simplify a lot of things, including making the comma optimizations better.
+#  - If I change PartialQuery.Combinator to indicate combinator of
+#    PartialQuery, it will simplify a lot of things, including
+#    making the comma optimizations better.
 
 import xmltree
 import strutils
@@ -23,10 +24,11 @@ type
         tkParam
         tkComma
 
-        # NOTE: These are handled the same in some contexts, but they are different.
-        #       `tkIdentifier` can only contain a very specific subset of characters,
-        #       but tkString can contain anything.
-        #       This means that both `#foo%` and `[id=foo%]` is invalid, but not `[id="foo%"]` or `#foo\%`.
+        # NOTE: These are handled the same in some contexts, but they
+        #       are different. `tkIdentifier` can only contain a very specific
+        #       subset of characters, but tkString can contain anything.
+        #       This means that both `#foo%` and `[id=foo%]` is invalid,
+        #       but not `[id="foo%"]` or `#foo\%`.
         tkIdentifier, tkString
 
         tkClass, tkId, tkElement
@@ -85,7 +87,8 @@ type
     NodeWithParent = tuple
         parent: XmlNode
         # Index is the index used by `xmltree`,
-        # elementIndex is the index when only counting elements (not text nodes etc).
+        # elementIndex is the index when only counting elements
+        # (not text nodes etc).
         index, elementIndex: int
 
     Combinator = enum
@@ -98,7 +101,8 @@ type
     QueryOption* = enum
         optUniqueIds          ## Assume unique id's or not
         optUnicodeIdentifiers ## Allow non-ascii in identifiers (e.g `#exämple`)
-        optSimpleNot          ## Disallow more complex :not selectors. Annoying but that's the spec.
+        optSimpleNot          ## Disallow more complex :not selectors.
+                              ## Annoying but that's the spec.
                               ## Combinators/comma are not allowed even if true.
 
     Lexer = object
@@ -107,9 +111,10 @@ type
         options: set[QueryOption]
         current, next: Token
 
-    Query* = object
-        ## Represents a parsed query. Can be used with `exec(q: Query, xml: XmlNode, single: bool)`.
-        roots: seq[PartialQuery] # Because of the comma operator, a query can consist of multiple complete queries.
+    Query* = object ## Represents a parsed query.
+        roots: seq[PartialQuery] # Because of the comma operator,
+                                 # a query can consist of multiple
+                                 # chained queries.
         options: set[QueryOption]
 
     PartialQuery = ref object
@@ -129,11 +134,13 @@ type
 
 {.deprecated: [NimqueryOption: QueryOption].}
 
-const DefaultQueryOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }
+const DefaultQueryOptions* = { optUniqueIds, optUnicodeIdentifiers,
+    optSimpleNot }
 const NimqueryDefaultOptions* {.deprecated.} = DefaultQueryOptions
 
-const identifiers = Letters + Digits + { '-', '_', '\\' }
-# NOTE: This is not the same as `strutils.Whitespace`. These values are defined by spec.
+const Identifiers = Letters + Digits + { '-', '_', '\\' }
+# NOTE: This is not the same as `strutils.Whitespace`.
+#       These values are defined by spec.
 const CssWhitespace = { '\x20', '\x09', '\x0A', '\x0D', '\x0C' }
 const Combinators = CssWhitespace + {  '+', '~', '>' }
 
@@ -153,7 +160,8 @@ const CombinatorKinds = {
 
 proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
 proc `$`(q: PartialQuery): string {. noSideEffect .}
-proc parseHtmlQuery*(queryString: string, options: set[QueryOption] = DefaultQueryOptions): Query
+proc parseHtmlQuery*(queryString: string,
+                     options: set[QueryOption] = DefaultQueryOptions): Query
 
 template log(msg: string): typed =
     when DEBUG:
@@ -201,23 +209,26 @@ proc newUnexpectedCharacterException(c: char): ref ParseError =
 proc newParseException(q: string): ref ParseError =
     return newException(ParseError, "Failed to parse HTML query '" & q & "'")
 
-proc initDemand(kind: static[TokenKind], notQuery: PartialQuery): Demand =
-    return Demand(kind: kind, notQuery: notQuery)
+proc initDemand(kind: TokenKind, notQuery: PartialQuery): Demand =
+    result.kind = kind
+    result.notQuery = notQuery
 
-proc initDemand(kind: static[TokenKind], element: string): Demand =
-    return Demand(kind: kind, element: element)
+proc initDemand(kind: TokenKind, element: string): Demand =
+    result.kind = kind
+    result.element = element
 
 proc initPseudoDemand(kind: TokenKind): Demand =
-    result = Demand(kind: tkPseudoFirstOfType)
     result.kind = kind
 
 proc initAttributeDemand(kind: TokenKind, attrName, attrValue: string): Demand =
-    result = Demand(kind: tkAttributeExists, attrName: attrName, attrValue: attrValue)
     result.kind = kind
+    result.attrName = attrName
+    result.attrValue = attrValue
 
 proc initPseudoDemand(kind: TokenKind, a, b: int): Demand =
-    result = Demand(kind: tkPseudoNthChild, a: a, b: b)
     result.kind = kind
+    result.a = a
+    result.b = b
 
 proc `$`(demand: Demand): string =
     case demand.kind:
@@ -225,7 +236,8 @@ proc `$`(demand: Demand): string =
         if demand.kind == tkAttributeExists:
             result = "[" & demand.attrName & "]"
         else:
-            result = "[" & demand.attrName & demand.kind.attrComparerString & "'" & demand.attrValue & "']"
+            result = "[" & demand.attrName & demand.kind.attrComparerString &
+                "'" & demand.attrValue & "']"
     of tkPseudoNot:
         result = ":" & $demand.kind & "(" & $demand.notQuery & ")"
     of NthKinds:
@@ -251,7 +263,8 @@ proc `==`(d1, d2: Demand): bool =
     else:
         raise newException(Exception, "Invalid demand kind: " & $d1.kind)
 
-iterator children(node: XmlNode, offset: NodeWithParent = (nil, -1, -1)): NodeWithParent =
+iterator children(node: XmlNode,
+                  offset: NodeWithParent = (nil, -1, -1)): NodeWithParent =
     var idx = offset.index + 1
     var elIdx = offset.elementIndex + 1
     while idx < node.len:
@@ -261,7 +274,7 @@ iterator children(node: XmlNode, offset: NodeWithParent = (nil, -1, -1)): NodeWi
             elIdx.inc
         idx.inc
 
-proc initToken(kind: static[TokenKind], value: string = ""): Token =
+proc initToken(kind: TokenKind, value: string = ""): Token =
     return Token(kind: kind, value: value)
 
 proc `$`(token: Token): string =
@@ -271,8 +284,9 @@ proc `$`(token: Token): string =
     else:
         result.add "]"
 
-proc newPartialQuery(demands: seq[Demand], combinator: Combinator): PartialQuery =
-    return PartialQuery(demands: demands, nextQueries: nil, combinator: combinator)
+proc newPartialQuery(demands: seq[Demand],
+                     combinator: Combinator): PartialQuery =
+    return PartialQuery(demands: demands, combinator: combinator)
 
 proc debugToString(q: PartialQuery): string =
     result = ""
@@ -339,11 +353,14 @@ proc append(q: var PartialQuery, demands: seq[Demand], combinator: Combinator) =
             itr = itr.nextQueries[0]
         itr.nextQueries = @[ newPartialQuery(demands, combinator) ]
 
-proc canFindMultiple(q: PartialQuery, comb: Combinator, options: set[QueryOption]): bool =
-    # Returns true if the current queries demands can be satisfied by multiple elements.
-    # This is used to check if the search should stop after the first element has been found.
+proc canFindMultiple(q: PartialQuery, comb: Combinator,
+                     options: set[QueryOption]): bool =
+    # Returns true if the current queries demands can be satisfied by
+    # multiple elements. This is used to check if the search should stop
+    # after the first element has been found.
     for demand in q.demands:
-        if optUniqueIds in options and demand.kind in AttributeKinds and demand.attrName == "id":
+        if optUniqueIds in options and demand.kind in AttributeKinds and
+                demand.attrName == "id":
             return false
         if comb in { cmChildren, cmSiblings } and demand.kind in
                 { tkPseudoFirstOfType, tkPseudoLastOfType,
@@ -410,12 +427,15 @@ proc isValidNotQuery(q: Query, options: set[QueryOption]): bool =
         q.roots[0].nextQueries.len == 0 and
         (q.roots[0].demands.len == 1 or not (optSimpleNot in options))
 
-proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: bool, opts: set[QueryOption]): SearchContext =
-    SearchContext(position: pos, combinator: comb, options: opts, single: single)
+proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: bool,
+                       options: set[QueryOption]): SearchContext =
+    SearchContext(position: pos, combinator: comb,
+        options: options, single: single)
 
-proc forward(ctx: SearchContext, pos: NodeWithParent, comb: Combinator): SearchContext =
+proc forward(ctx: SearchContext, pos: NodeWithParent,
+             comb: Combinator): SearchContext =
     # Create the next context state, going forward in the search
-    SearchContext(position: pos, combinator: comb, options: ctx.options, single: ctx.single)
+    initSearchContext(pos, comb, ctx.single, ctx.options)
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
     while input[idx] in Digits:
@@ -430,7 +450,8 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
     if input[idx] in { '\x0C', '\x0D', '\x0A'}:
         raise newUnexpectedCharacterException(input[idx])
 
-    # No special handling is required for these. E.g '\n' means 'n', not 'newline'.
+    # No special handling is required for these.
+    # E.g '\n' means 'n', not 'newline'.
     if input[idx] notin HexDigits:
         # FIXME: Should this read a grapheme instead of a rune? I don't know
         let runeStr = input.runeAt(idx).toUTF8
@@ -476,8 +497,10 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
         '-'.int, '_'.int, '\\'.int
     }
 
-    if input[idx] == '_' or input[idx] in Digits or
-            (input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits)):
+    if input[idx] == '_' or
+            input[idx] in Digits or
+            (input[idx] == '-' and
+                input.safeCharCompare(idx + 1, { '-' } + Digits)):
         raise newUnexpectedCharacterException(input[idx + 1])
 
     proc isValidIdentifier(rune: Rune): bool =
@@ -504,7 +527,7 @@ proc readIdentifierAscii(input: string, idx: var int, buffer: var string) =
     if input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits):
         raise newUnexpectedCharacterException(input[idx + 1])
 
-    while input[idx] in identifiers and idx < input.len:
+    while input[idx] in Identifiers and idx < input.len:
         if input[idx] == '\\':
             readEscape(input, idx, buffer)
         else:
@@ -518,17 +541,20 @@ proc readParams(input: string, idx: var int, buffer: var string) =
     var sglQuoteStringContext = false
     idx.inc
 
-    while input[idx] != ')' or paramContextCount > 0 or dblQuoteStringContext or sglQuoteStringContext:
+    while input[idx] != ')' or paramContextCount > 0 or
+            dblQuoteStringContext or sglQuoteStringContext:
         if input[idx] == '"' and not sglQuoteStringContext:
             dblQuoteStringContext = not dblQuoteStringContext
 
         if input[idx] == '\'' and not dblQuoteStringContext:
             sglQuoteStringContext = not sglQuoteStringContext
 
-        if input[idx] == '(' and not dblQuoteStringContext and not sglQuoteStringContext:
+        if input[idx] == '(' and not dblQuoteStringContext and
+                not sglQuoteStringContext:
             paramContextCount.inc
 
-        if input[idx] == ')' and not dblQuoteStringContext and not sglQuoteStringContext:
+        if input[idx] == ')' and not dblQuoteStringContext and
+                not sglQuoteStringContext:
             paramContextCount.dec
 
         if input[idx] == '\\':
@@ -539,7 +565,8 @@ proc readParams(input: string, idx: var int, buffer: var string) =
         idx.inc
 
         if idx > high(input):
-            raise newException(ParseError, "Non-terminated pseudo argument list")
+            raise newException(ParseError,
+                "Non-terminated pseudo argument list")
 
     idx.inc
 
@@ -563,7 +590,8 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
             case input[idx]
             of { '+', '-' }:
                 buffer.add $input[idx]
-                # NOTE: Spaces is allowed around second sign, but not around first.
+                # NOTE: Spaces is allowed around second sign,
+                #       but not around first.
                 allowSpace = false
                 idx.inc
             of Digits:
@@ -600,34 +628,22 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
         return (a.parseInt, b.parseInt)
 
 proc initPseudoToken(str: string): Token =
-    # XXX: Replace this with parseEnum?
-    case str
-    of ":empty":
-        return initToken(tkPseudoEmpty)
-    of ":only-child":
-        return initToken(tkPseudoOnlyChild)
-    of ":only-of-type":
-        return initToken(tkPseudoOnlyOfType)
-    of ":first-child":
-        return initToken(tkPseudoFirstChild)
-    of ":last-child":
-        return initToken(tkPseudoLastChild)
-    of ":last-of-type":
-        return initToken(tkPseudoLastOfType)
-    of ":first-of-type":
-        return initToken(tkPseudoFirstOfType)
-    of ":not":
-        return initToken(tkPseudoNot)
-    of ":nth-child":
-        return initToken(tkPseudoNthChild)
-    of ":nth-last-child":
-        return initToken(tkPseudoNthLastChild)
-    of ":nth-of-type":
-        return initToken(tkPseudoNthOfType)
-    of ":nth-last-of-type":
-        return initToken(tkPseudoNthLastOfType)
+    let kind = case str
+    of ":empty":            tkPseudoEmpty
+    of ":only-child":       tkPseudoOnlyChild
+    of ":only-of-type":     tkPseudoOnlyOfType
+    of ":first-child":      tkPseudoFirstChild
+    of ":last-child":       tkPseudoLastChild
+    of ":last-of-type":     tkPseudoLastOfType
+    of ":first-of-type":    tkPseudoFirstOfType
+    of ":not":              tkPseudoNot
+    of ":nth-child":        tkPseudoNthChild
+    of ":nth-last-child":   tkPseudoNthLastChild
+    of ":nth-of-type":      tkPseudoNthOfType
+    of ":nth-last-of-type": tkPseudoNthLastOfType
     else:
         raise newException(ParseError, "Unknown pseudo: " & str)
+    result = initToken(kind)
 
 proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     # Checks if the last two tokens represents the end of a simple selector.
@@ -656,7 +672,8 @@ proc forward(lexer: var Lexer) =
         token = initToken(tkString, buffer)
 
     of CssWhitespace:
-        if lexer.pos + 1 < lexer.input.len and lexer.input[lexer.pos + 1] notin Combinators and
+        if lexer.pos + 1 < lexer.input.len and
+                lexer.input[lexer.pos + 1] notin Combinators and
                 isFinishedSimpleSelector(lexer.next, lexer.current):
             token = initToken(tkCombinatorDescendents)
         else:
@@ -692,7 +709,8 @@ proc forward(lexer: var Lexer) =
         var buffer = ""
         buffer.add ch
         lexer.pos.inc
-        while lexer.input[lexer.pos] in identifiers and lexer.pos < lexer.input.len:
+        while lexer.input[lexer.pos] in Identifiers and
+                lexer.pos < lexer.input.len:
             buffer.add lexer.input[lexer.pos]
             lexer.pos.inc
 
@@ -752,7 +770,8 @@ proc forward(lexer: var Lexer) =
             readIdentifierAscii(lexer.input, lexer.pos, buffer)
 
         if buffer.isNilOrEmpty:
-            raise newUnexpectedCharacterException($lexer.input.runeAt(lexer.pos))
+            let rune = lexer.input.runeAt(lexer.pos)
+            raise newUnexpectedCharacterException($rune)
 
         if lexer.next.kind in CombinatorKinds + { tkComma, tkInvalid }:
             token = initToken(tkElement, buffer.toLowerAscii)
@@ -906,10 +925,12 @@ proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
 
     return true
 
-iterator searchDescendants(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
+iterator searchDescendants(queryRoot: PartialQuery,
+                           position: NodeWithParent): NodeWithParent =
     var queue = initDeque[NodeWithParent]()
     for nodeData in position.node.children:
-        queue.addLast((parent: position.node, index: nodeData.index, elementIndex: nodeData.elementIndex))
+        queue.addLast((parent: position.node, index: nodeData.index,
+            elementIndex: nodeData.elementIndex))
 
     while queue.len > 0:
         let pair = queue.popFirst()
@@ -917,42 +938,53 @@ iterator searchDescendants(queryRoot: PartialQuery, position: NodeWithParent): N
             yield pair
 
         for nodeData in pair.node.children:
-            queue.addLast((parent: pair.node, index: nodeData.index, elementIndex: nodeData.elementIndex))
+            queue.addLast((parent: pair.node, index: nodeData.index,
+                elementIndex: nodeData.elementIndex))
 
-iterator searchChildren(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
+iterator searchChildren(queryRoot: PartialQuery,
+                        position: NodeWithParent): NodeWithParent =
     for pair in position.node.children:
         if pair.satisfies queryRoot.demands:
             yield pair
 
-iterator searchSiblings(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
+iterator searchSiblings(queryRoot: PartialQuery,
+                        position: NodeWithParent): NodeWithParent =
     for pair in position.parent.children(offset = position):
         if pair.satisfies queryRoot.demands:
             yield pair
 
-iterator searchNextSibling(queryRoot: PartialQuery, position: NodeWithParent): NodeWithParent =
-    # It's a bit silly to have an iterator which will only yield 0 or 1 element,
-    # but it's nice for consistency with how the other combinators are implemented.
+iterator searchNextSibling(queryRoot: PartialQuery,
+                           position: NodeWithParent): NodeWithParent =
+    # It's a bit silly to have an iterator which will only yield 0 or 1
+    # element, but it's nice for consistency with how the other
+    # combinators are implemented.
 
     for pair in position.parent.children(offset = position):
         if pair.satisfies queryRoot.demands:
             yield pair
         break # by definition, there can only be one next sibling
 
-proc execRecursive(queryRoot: PartialQuery, context: SearchContext, output: var seq[XmlNode]) =
+type SearchIterator = iterator(q: PartialQuery,
+                               p: NodeWithParent): NodeWithParent {.inline.}
+
+proc execRecursive(queryRoot: PartialQuery, context: SearchContext,
+                   output: var seq[XmlNode]) =
     var position = context.position
 
-    template search(itr: iterator(q: PartialQuery, p: NodeWithParent): NodeWithParent {. inline .}): typed =
+    template search(itr: SearchIterator): typed =
         for next in itr(queryRoot, position):
             if queryRoot.nextQueries.len == 0:
                 output.add next.node
             else:
                 for subquery in queryRoot.nextQueries:
-                    let nextContext = context.forward(next, queryRoot.combinator)
-                    subquery.execRecursive(nextContext, output)
+                    let newContext = context.forward(next, queryRoot.combinator)
+                    subquery.execRecursive(newContext, output)
 
             if context.single and output.len > 0:
                 break
-            if not queryRoot.canFindMultiple(context.combinator, context.options):
+            # TODO: This should only be checked once?
+            if not queryRoot.canFindMultiple(context.combinator,
+                    context.options):
                 break
 
     case context.combinator
@@ -966,17 +998,21 @@ template DQO: untyped = DefaultQueryOptions
 
 proc exec*(query: Query, root: XmlNode,
         single: bool): seq[XmlNode] =
-    ## Execute an already parsed query. If `single = true`, it will never return more than one element.
+	## Execute an already parsed query. If `single = true`,
+	## it will never return more than one element.
     result = newSeq[XmlNode]()
 
     # The <wrapper> element is needed due to how execRecursive is implemented.
-    # The "current" position is never matched against, only the childs/siblings (depending on combinator).
-    # So to make sure that the original root is tested, we need to set the starting position
-    # to an imaginary wrapper element.
-    # Since `NodeWIthParent` always require a parent, we also add a wrapper-root element.
-    let wRoot = (parent: <>"wrapper-root"(<>wrapper(root)), index: 0, elementIndex: 0)
+	# The "current" position is never matched against,
+	# only the childs/siblings (depending on combinator). So to make sure that
+	# the original root is tested, we need to set the starting position to an
+	# imaginary wrapper element. Since `NodeWIthParent` always require a parent,
+	# we also add a wrapper-root element.
+	let wrapper = <>wrapper(root)
+    let wRoot = (parent: <>"wrapper-root"(wrapper), index: 0, elementIndex: 0)
     for queryRoot in query.roots:
-        let context = initSearchContext(wRoot, cmDescendants, single, query.options)
+		let context = initSearchContext(wRoot, cmDescendants, single,
+			query.options)
         queryRoot.execRecursive(context, result)
 
 proc parseHtmlQuery*(queryString: string,
@@ -1069,7 +1105,8 @@ proc parseHtmlQuery*(queryString: string,
 
 proc querySelector*(root: XmlNode, queryString: string,
         options: set[QueryOption] = DQO): XmlNode =
-    ## Get the first element matching `queryString`, or `nil` if no such element exists.
+	## Get the first element matching `queryString`,
+	## or `nil` if no such element exists.
     ## Raises `ParseError` if parsing of `queryString` fails.
     let query = parseHtmlQuery(queryString, options)
     let lst = query.exec(root, single = true)
@@ -1084,8 +1121,3 @@ proc querySelectorAll*(root: XmlNode, queryString: string,
     ## Raises `ParseError` if parsing of `queryString` fails.
     let query = parseHtmlQuery(queryString, options)
     result = query.exec(root, single = false)
-
-# var l = initLexer("#test", {})
-
-# echo l.current
-# echo l.next

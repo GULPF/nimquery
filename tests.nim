@@ -522,7 +522,7 @@ test "Issue with optimization of roots with different combinators":
     check(els.len == 2)
 
 test "Nested pseudos with complex :not(...)":
-    let options = NimqueryDefaultOptions - { optSimpleNot }
+    let options = DefaultQueryOptions - { optSimpleNot }
     var els = xml.querySelectorAll("#test41 div:not(.maybe-skip:nth-child(even))", options)
     check(els.len == 3)
 

@@ -101,6 +101,12 @@ type
         optSimpleNot          ## Disallow more complex :not selectors. Annoying but that's the spec.
                               ## Combinators/comma are not allowed even if true.
 
+    Lexer = object
+        input: string
+        pos: int
+        options: set[QueryOption]
+        current, next: Token
+
     Query* = object
         ## Represents a parsed query. Can be used with `exec(q: Query, xml: XmlNode, single: bool)`.
         roots: seq[PartialQuery] # Because of the comma operator, a query can consist of multiple complete queries.
@@ -631,144 +637,155 @@ proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     if prev.kind == tkIdentifier and prevPrev.kind in { tkClass, tkId }:
         return true
 
-iterator tokenize(rawInput: string,
-                  options: set[QueryOption]): Token {.closure.} =
-    let input = rawInput.strip
-    var prevToken: Token
-    var prevPrevtoken: Token
+proc forward(lexer: var Lexer) =
+    if lexer.pos > lexer.input.high:
+        lexer.current = lexer.next
+        lexer.next = initToken(tkEoi)
+        return
+
+    let ch = lexer.input[lexer.pos]
     var skip = false
-    var idx = 0
+    var token: Token
+    log "char: '" & ch & "'"
 
-    while idx < input.len:
-        let ch = input[idx]
-        var token: Token
-        log "char: '" & ch & "'"
+    case ch:
 
-        case ch:
+    of { '"', '\'' }:
+        var buffer = ""
+        readStringLiteral(lexer.input, lexer.pos, buffer)
+        token = initToken(tkString, buffer)
 
-        of { '"', '\'' }:
-            var buffer = ""
-            readStringLiteral(input, idx, buffer)
-            token = initToken(tkString, buffer)
-
-        of CssWhitespace:
-            if idx + 1 < input.len and input[idx + 1] notin Combinators and
-                    isFinishedSimpleSelector(prevToken, prevPrevtoken):
-                token = initToken(tkCombinatorDescendents)
-            else:
-                skip = true
-
-            idx.inc
-
-        of '~':
-            if input.safeCharCompare(idx + 1, '='):
-                token = initToken(tkAttributeItem)
-                idx.inc 2
-            else:
-                token = initToken(tkCombinatorSiblings)
-                idx.inc
-
-        of '+':
-            token = initToken(tkCombinatorNextSibling)
-            idx.inc
-
-        of '>':
-            token = initToken(tkCombinatorChildren)
-            idx.inc
-
-        of '[':
-            token = initToken(tkBracketStart)
-            idx.inc
-
-        of ']':
-            token = initToken(tkBracketEnd)
-            idx.inc
-
-        of ':':
-            var buffer = ""
-            buffer.add ch
-            idx.inc
-            while input[idx] in identifiers and idx < input.len:
-                buffer.add input[idx]
-                idx.inc
-
-            token = initPseudoToken(buffer)
-
-        of '#':
-            idx.inc
-            token = initToken(tkId)
-
-        of '.':
-            idx.inc
-            token = initToken(tkClass)
-
-        of '*':
-            if input.safeCharCompare(idx + 1, '='):
-                token = initToken(tkAttributeSubstring)
-                idx.inc 2
-            else:
-                idx.inc
-                # No need to emit since tkUniversal matches everything?
-                # token = initToken(tkUniversal)
-                skip = true
-
-        of '(':
-            var buffer = ""
-            readParams(input, idx, buffer)
-            token = initToken(tkParam, buffer)
-
-        of '=':
-            token = initToken(tkAttributeExact)
-            idx.inc
-
-        of '|':
-            if input.safeCharCompare(idx + 1, '='):
-                token = initToken(tkAttributePipe)
-                idx.inc 2
-
-        of '^':
-            if input.safeCharCompare(idx + 1, '='):
-                token = initToken(tkAttributeStart)
-                idx.inc 2
-
-        of '$':
-            if input.safeCharCompare(idx + 1, '='):
-                token = initToken(tkAttributeEnd)
-                idx.inc 2
-
-        of ',':
-            token = initToken(tkComma)
-            idx.inc
-
+    of CssWhitespace:
+        if lexer.pos + 1 < lexer.input.len and lexer.input[lexer.pos + 1] notin Combinators and
+                isFinishedSimpleSelector(lexer.next, lexer.current):
+            token = initToken(tkCombinatorDescendents)
         else:
-            var buffer = ""
-            if optUnicodeIdentifiers in options:
-                readIdentifier(input, idx, buffer)
-            else:
-                readIdentifierAscii(input, idx, buffer)
+            skip = true
 
-            if buffer.isNilOrEmpty:
-                raise newUnexpectedCharacterException($input.runeAt(idx))
+        lexer.pos.inc
 
-            if prevToken.kind in CombinatorKinds + { tkComma, tkInvalid }:
-                token = initToken(tkElement, buffer.toLowerAscii)
-            else:
-                token = initToken(tkIdentifier, buffer)
-
-        if not skip:
-            if token.kind == tkInvalid:
-                raise newUnexpectedCharacterException(ch)
-
-            # TODO: It might be wise to perform some validation here.
-            #       e.g tkParam is only valid after tkPseudoNot tkPseudoNth*
-            prevPrevtoken = prevToken
-            prevToken = token
-            yield token
+    of '~':
+        if lexer.input.safeCharCompare(lexer.pos + 1, '='):
+            token = initToken(tkAttributeItem)
+            lexer.pos.inc 2
         else:
-            skip = false
+            token = initToken(tkCombinatorSiblings)
+            lexer.pos.inc
 
-    while true:
-        yield initToken(tkEoi)
+    of '+':
+        token = initToken(tkCombinatorNextSibling)
+        lexer.pos.inc
+
+    of '>':
+        token = initToken(tkCombinatorChildren)
+        lexer.pos.inc
+
+    of '[':
+        token = initToken(tkBracketStart)
+        lexer.pos.inc
+
+    of ']':
+        token = initToken(tkBracketEnd)
+        lexer.pos.inc
+
+    of ':':
+        var buffer = ""
+        buffer.add ch
+        lexer.pos.inc
+        while lexer.input[lexer.pos] in identifiers and lexer.pos < lexer.input.len:
+            buffer.add lexer.input[lexer.pos]
+            lexer.pos.inc
+
+        token = initPseudoToken(buffer)
+
+    of '#':
+        lexer.pos.inc
+        token = initToken(tkId)
+
+    of '.':
+        lexer.pos.inc
+        token = initToken(tkClass)
+
+    of '*':
+        if lexer.input.safeCharCompare(lexer.pos + 1, '='):
+            token = initToken(tkAttributeSubstring)
+            lexer.pos.inc 2
+        else:
+            lexer.pos.inc
+            # No need to emit since tkUniversal matches everything?
+            # token = initToken(tkUniversal)
+            skip = true
+
+    of '(':
+        var buffer = ""
+        readParams(lexer.input, lexer.pos, buffer)
+        token = initToken(tkParam, buffer)
+
+    of '=':
+        token = initToken(tkAttributeExact)
+        lexer.pos.inc
+
+    of '|':
+        if lexer.input.safeCharCompare(lexer.pos + 1, '='):
+            token = initToken(tkAttributePipe)
+            lexer.pos.inc 2
+
+    of '^':
+        if lexer.input.safeCharCompare(lexer.pos + 1, '='):
+            token = initToken(tkAttributeStart)
+            lexer.pos.inc 2
+
+    of '$':
+        if lexer.input.safeCharCompare(lexer.pos + 1, '='):
+            token = initToken(tkAttributeEnd)
+            lexer.pos.inc 2
+
+    of ',':
+        token = initToken(tkComma)
+        lexer.pos.inc
+
+    else:
+        var buffer = ""
+        if optUnicodeIdentifiers in lexer.options:
+            readIdentifier(lexer.input, lexer.pos, buffer)
+        else:
+            readIdentifierAscii(lexer.input, lexer.pos, buffer)
+
+        if buffer.isNilOrEmpty:
+            raise newUnexpectedCharacterException($lexer.input.runeAt(lexer.pos))
+
+        if lexer.next.kind in CombinatorKinds + { tkComma, tkInvalid }:
+            token = initToken(tkElement, buffer.toLowerAscii)
+        else:
+            token = initToken(tkIdentifier, buffer)
+
+    if not skip:
+        if token.kind == tkInvalid:
+            raise newUnexpectedCharacterException(ch)
+
+        # TODO: It might be wise to perform some validation here.
+        #       e.g tkParam is only valid after tkPseudoNot tkPseudoNth*
+        lexer.current = lexer.next
+        lexer.next = token
+    else:
+        lexer.forward
+
+proc initLexer(input: string, options: set[QueryOption]): Lexer =
+    # TODO: Get rid of strip
+    result.input = input.strip
+    result.pos = 0
+    result.options = options
+    forward(result)
+    forward(result)
+
+proc eat(lexer: var Lexer, kind: set[TokenKind]): Token =
+    if lexer.next.kind notin kind:
+        raise newParseException(lexer.input)
+    lexer.forward()
+    result = lexer.current
+
+proc eat(lexer: var Lexer, kind: TokenKind): Token {.inline.} =
+    lexer.eat({ kind })
 
 proc hasAttr(node: XmlNode, attr: string): bool {. inline .} =
     return not node.attrs.isNil and node.attrs.hasKey(attr)
@@ -966,66 +983,47 @@ proc parseHtmlQuery*(queryString: string,
         options: set[QueryOption] = DQO): Query =
     ## Parses a query for later use.
     ## Raises `ParseError` if parsing of `queryString` fails.
-    var query = Query(roots: @[])
+    result.roots = @[]
     var queryRoot: PartialQuery = nil
     var demandBuffer = newSeq[Demand]()
-
-    let itr: iterator(s: string, o: set[QueryOption]): Token = tokenize
-    var c: Token
-    var n: Token
-
-    template forward =
-        # NOTE: `tokenize` goes on forever so no need for `finished`
-        c = n
-        n = itr(queryString, options)
-
-    proc eat(kind: set[TokenKind]): Token =
-        if n.kind notin kind:
-            raise newParseException(queryString)
-        forward()
-        c
-
-    template eat(kind: TokenKind): Token = eat({ kind })
-
-    forward()
-    forward()
+    var lexer = initLexer(queryString, options)
 
     while true:
-        case c.kind
+        case lexer.current.kind
 
         of tkClass:
             demandBuffer.add initAttributeDemand(tkAttributeItem, "class",
-                eat(tkIdentifier).value)
+                lexer.eat(tkIdentifier).value)
 
         of tkId:
             demandBuffer.add initAttributeDemand(tkAttributeExact, "id",
-                eat(tkIdentifier).value)
+                lexer.eat(tkIdentifier).value)
 
         of tkElement:
-            demandBuffer.add initDemand(tkElement, c.value)
+            demandBuffer.add initDemand(tkElement, lexer.current.value)
 
         of tkBracketStart:
-            let f = eat(tkIdentifier)
-            let nkind = n.kind
+            let f = lexer.eat(tkIdentifier)
+            let nkind = lexer.next.kind
             case nkind
             of AttributeKinds - { tkAttributeExists }:
-                discard eat(nkind)
-                let v = eat({ tkIdentifier, tkString })
+                discard lexer.eat(nkind)
+                let v = lexer.eat({ tkIdentifier, tkString })
                 demandBuffer.add initAttributeDemand(nkind, f.value, v.value)
-                discard eat(tkBracketEnd)
+                discard lexer.eat(tkBracketEnd)
             of tkBracketEnd:
                 demandBuffer.add initAttributeDemand(tkAttributeExists,
                     f.value, "")
-                discard eat(tkBracketEnd)
+                discard lexer.eat(tkBracketEnd)
             else:
                 raise newParseException(queryString)
 
         of PseudoNoParamsKinds:
-            demandBuffer.add initPseudoDemand(c.kind)
+            demandBuffer.add initPseudoDemand(lexer.current.kind)
 
         of PseudoParamsKinds:
-            let pseudoKind = c.kind
-            let params = eat(tkParam)
+            let pseudoKind = lexer.current.kind
+            let params = lexer.eat(tkParam)
             case pseudoKind
             of tkPseudoNot:
                 # Not the cleanest way to this, but eh
@@ -1043,12 +1041,12 @@ proc parseHtmlQuery*(queryString: string,
             else: doAssert(false) # can't happen
 
         of CombinatorKinds:
-            queryRoot.append demandBuffer, c.kind.Combinator
+            queryRoot.append demandBuffer, lexer.current.kind.Combinator
             demandBuffer = @[]
 
         of tkComma:
             queryRoot.append demandBuffer, cmLeaf
-            query.roots.add queryRoot
+            result.roots.add queryRoot
             demandBuffer = @[]
             queryRoot = nil
 
@@ -1059,17 +1057,15 @@ proc parseHtmlQuery*(queryString: string,
         of tkEoi:
             break
 
-        forward()
+        lexer.forward()
 
     queryRoot.append demandBuffer, cmLeaf
-    query.roots.add queryRoot
-    query.optimize
-    query.options = options
+    result.roots.add queryRoot
+    result.optimize
+    result.options = options
 
     log "\ninput: \n" & queryString
-    log "\nquery: \n" & query.debugToString
-
-    query
+    log "\nquery: \n" & result.debugToString
 
 proc querySelector*(root: XmlNode, queryString: string,
         options: set[QueryOption] = DQO): XmlNode =
@@ -1088,3 +1084,8 @@ proc querySelectorAll*(root: XmlNode, queryString: string,
     ## Raises `ParseError` if parsing of `queryString` fails.
     let query = parseHtmlQuery(queryString, options)
     result = query.exec(root, single = false)
+
+# var l = initLexer("#test", {})
+
+# echo l.current
+# echo l.next

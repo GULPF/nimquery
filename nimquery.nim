@@ -998,21 +998,21 @@ template DQO: untyped = DefaultQueryOptions
 
 proc exec*(query: Query, root: XmlNode,
         single: bool): seq[XmlNode] =
-	## Execute an already parsed query. If `single = true`,
-	## it will never return more than one element.
+    ## Execute an already parsed query. If `single = true`,
+    ## it will never return more than one element.
     result = newSeq[XmlNode]()
 
     # The <wrapper> element is needed due to how execRecursive is implemented.
-	# The "current" position is never matched against,
-	# only the childs/siblings (depending on combinator). So to make sure that
-	# the original root is tested, we need to set the starting position to an
-	# imaginary wrapper element. Since `NodeWIthParent` always require a parent,
-	# we also add a wrapper-root element.
-	let wrapper = <>wrapper(root)
+    # The "current" position is never matched against,
+    # only the childs/siblings (depending on combinator). So to make sure that
+    # the original root is tested, we need to set the starting position to an
+    # imaginary wrapper element. Since `NodeWIthParent` always require a parent,
+    # we also add a wrapper-root element.
+    let wrapper = <>wrapper(root)
     let wRoot = (parent: <>"wrapper-root"(wrapper), index: 0, elementIndex: 0)
     for queryRoot in query.roots:
-		let context = initSearchContext(wRoot, cmDescendants, single,
-			query.options)
+        let context = initSearchContext(wRoot, cmDescendants, single,
+            query.options)
         queryRoot.execRecursive(context, result)
 
 proc parseHtmlQuery*(queryString: string,
@@ -1105,8 +1105,8 @@ proc parseHtmlQuery*(queryString: string,
 
 proc querySelector*(root: XmlNode, queryString: string,
         options: set[QueryOption] = DQO): XmlNode =
-	## Get the first element matching `queryString`,
-	## or `nil` if no such element exists.
+    ## Get the first element matching `queryString`,
+    ## or `nil` if no such element exists.
     ## Raises `ParseError` if parsing of `queryString` fails.
     let query = parseHtmlQuery(queryString, options)
     let lst = query.exec(root, single = true)

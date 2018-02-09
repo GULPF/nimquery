@@ -1,5 +1,5 @@
-# nimquery
-A library for querying HTML using CSS selectors, like JavaScripts `document.querySelector`.
+# Nimquery
+A library for querying HTML using CSS selectors, like JavaScripts `document.querySelector`/`document.querySelectorAll`.
 
 ## Usage
 ```nim
@@ -47,7 +47,9 @@ Nimquery supports all combinators, the comma operator and all [CSS3 selectors](h
 ## API
 
 ```nim
-proc querySelectorAll*(XmlNode: root, queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): seq[XmlNode]
+proc querySelectorAll*(root: XmlNode,
+                       queryString: string,
+                       options: set[NimqueryOption] = DefaultQueryOptions): seq[XmlNode]
 ```
 Get all elements matching `queryString`.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -56,7 +58,9 @@ See [Options](#options) for information about the `options` parameter.
 - - -
 
 ```nim
-proc querySelector*(XmlNode: root, queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): XmlNode
+proc querySelector*(root: XmlNode,
+                    queryString: string,
+                    options: set[NimqueryOption] = DefaultQueryOptions): XmlNode
 ```
 Get the first element matching `queryString`, or `nil` if no such element exists.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -65,7 +69,8 @@ See [Options](#options) for information about the `options` parameter.
 - - -
 
 ```nim
-proc parseHtmlQuery*(queryString: string, options: set[NimqueryOption] = NimqueryDefaultOptions): Query
+proc parseHtmlQuery*(queryString: string,
+                     options: set[NimqueryOption] = DefaultQueryOptions): Query
 ```
 Parses a query for later use.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -74,18 +79,20 @@ See [Options](#options) for information about the `options` parameter.
 - - -
 
 ```nim
-proc exec*(query: Query, root: XmlNode, single: static[bool]): seq[XmlNode]
+proc exec*(query: Query,
+           root: XmlNode,
+           single: bool): seq[XmlNode]
 ```
 Execute an already parsed query. If `single = true`, it will never return more than one element.
 
 ### Options <a name="options"></a>
-The `NimqueryOption` enum contains flags for configuring the behavior when parsing/searching:
+The `QueryOption` enum contains flags for configuring the behavior when parsing/searching:
 
 - `optUniqueIds`: Indicates if id attributes should be assumed to be unique.
-- `optSimpleNot`: Indicates if only simple selectors are allowed in the `:not(...)`. Note that combinators are never allowed.
+- `optSimpleNot`: Indicates if only simple selectors are allowed as an argument to the `:not(...)` psuedo-class. Note that combinators are not allowed in the argument even if this flag is excluded.
 - `optUnicodeIdentifiers`: Indicates if unicode characters are allowed inside identifiers. Doesn't affect strings where unicode is always allowed.
 
-The default options are exported as `const nimqueryDefaultOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }`.
+The default options is defined as `const DefaultQueryOptions* = { optUniqueIds, optUnicodeIdentifiers, optSimpleNot }`.
 
 Below is an example of using the options parameter to allow a complex `:not(...)` selector.
 
@@ -108,7 +115,7 @@ let html = """
   </html>
 """
 let xml = parseHtml(newStringStream(html))
-let options = nimqueryDefaultOptions - { optSimpleNot }
+let options = DefaultQueryOptions - { optSimpleNot }
 let elements = xml.querySelectorAll("p:not(.maybe-skip:nth-child(even))", options)
 echo elements
 # => @[<p>1</p>, <p class="maybe-skip">3</p>, <p>4</p>]

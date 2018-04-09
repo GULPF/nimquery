@@ -49,7 +49,7 @@ Nimquery supports all combinators, the comma operator and all [CSS3 selectors](h
 ```nim
 proc querySelectorAll*(root: XmlNode,
                        queryString: string,
-                       options: set[NimqueryOption] = DefaultQueryOptions): seq[XmlNode]
+                       options: set[QueryOption] = DefaultQueryOptions): seq[XmlNode]
 ```
 Get all elements matching `queryString`.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -60,7 +60,7 @@ See [Options](#options) for information about the `options` parameter.
 ```nim
 proc querySelector*(root: XmlNode,
                     queryString: string,
-                    options: set[NimqueryOption] = DefaultQueryOptions): XmlNode
+                    options: set[QueryOption] = DefaultQueryOptions): XmlNode
 ```
 Get the first element matching `queryString`, or `nil` if no such element exists.  
 Raises `ParseError` if parsing of `queryString` fails.  
@@ -70,7 +70,7 @@ See [Options](#options) for information about the `options` parameter.
 
 ```nim
 proc parseHtmlQuery*(queryString: string,
-                     options: set[NimqueryOption] = DefaultQueryOptions): Query
+                     options: set[QueryOption] = DefaultQueryOptions): Query
 ```
 Parses a query for later use.  
 Raises `ParseError` if parsing of `queryString` fails.  

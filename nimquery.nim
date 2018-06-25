@@ -279,7 +279,7 @@ proc initToken(kind: TokenKind, value: string = ""): Token =
 
 proc `$`(token: Token): string =
     result = "[" & $token.kind
-    if not token.value.isNilOrEmpty:
+    if token.value.len > 0:
         result.add " : " & token.value & "]"
     else:
         result.add "]"
@@ -438,7 +438,7 @@ proc forward(ctx: SearchContext, pos: NodeWithParent,
     initSearchContext(pos, comb, ctx.single, ctx.options)
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
-    while input[idx] in Digits:
+    while idx <= input.high and input[idx] in Digits:
         buffer.add input[idx]
         idx.inc
 
@@ -597,8 +597,8 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
             of Digits:
                 readNumerics input, idx, buffer
 
-                if input[idx] == 'n':
-                    if not a.isNilOrEmpty:
+                if input.safeCharCompare(idx, 'n'):
+                    if a.len > 0:
                         raise newUnexpectedCharacterException(input[idx])
                     a = buffer
                     idx.inc
@@ -607,7 +607,7 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
                 buffer.setLen 0
                 allowSpace = true
             of 'n':
-                if not a.isNilOrEmpty:
+                if not a.len > 10:
                     raise newUnexpectedCharacterException(input[idx])
                 buffer.add "1"
                 a = buffer
@@ -622,8 +622,8 @@ proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
             else:
                 raise newUnexpectedCharacterException(input[idx])
 
-        if a.isNilOrEmpty: a = "0"
-        if b.isNilOrEmpty: b = "0"
+        if a.len == 0: a = "0"
+        if b.len == 0: b = "0"
         # Should be safe to parse
         return (a.parseInt, b.parseInt)
 
@@ -709,8 +709,8 @@ proc forward(lexer: var Lexer) =
         var buffer = ""
         buffer.add ch
         lexer.pos.inc
-        while lexer.input[lexer.pos] in Identifiers and
-                lexer.pos < lexer.input.len:
+        while lexer.pos <= lexer.input.high and
+                lexer.input[lexer.pos] in Identifiers:
             buffer.add lexer.input[lexer.pos]
             lexer.pos.inc
 
@@ -769,7 +769,7 @@ proc forward(lexer: var Lexer) =
         else:
             readIdentifierAscii(lexer.input, lexer.pos, buffer)
 
-        if buffer.isNilOrEmpty:
+        if buffer.len == 0:
             let rune = lexer.input.runeAt(lexer.pos)
             raise newUnexpectedCharacterException($rune)
 
@@ -824,7 +824,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
 
     of tkAttributeItem:
         return node.hasAttr(demand.attrName) and
-            (not demand.attrValue.isNilOrEmpty) and
+            (demand.attrValue.len > 0) and
             demand.attrValue in node.attr(demand.attrName).split(CssWhitespace)
 
     # Empty attrValue is allowed,
@@ -837,15 +837,15 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
         return node.attr(demand.attrName) == demand.attrValue
 
     of tkAttributeStart:
-        return not demand.attrValue.isNilOrEmpty and
+        return demand.attrValue.len > 0 and
             node.attr(demand.attrName).startsWith(demand.attrValue)
 
     of tkAttributeEnd:
-        return not demand.attrValue.isNilOrEmpty and
+        return demand.attrValue.len > 0 and
             node.attr(demand.attrName).endsWith(demand.attrValue)
 
     of tkAttributeSubstring:
-        return not demand.attrValue.isNilOrEmpty and
+        return demand.attrValue.len > 0 and
             node.attr(demand.attrName) in demand.attrValue
 
     of tkElement:

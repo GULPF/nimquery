@@ -79,7 +79,7 @@ type
         of NthKinds:
             a, b: int
         of tkPseudoNot:
-            notQuery: PartialQuery
+            notQuery: QueryPart
         of tkElement:
             element: string
         else: discard
@@ -112,25 +112,13 @@ type
         current, next: Token
 
     Query* = object ## Represents a parsed query.
-        roots: seq[PartialQuery] # Because of the comma operator,
-                                 # a query can consist of multiple
-                                 # chained queries.
+        queries: seq[seq[QueryPart]]
         options: set[QueryOption]
+        queryStr: string ## The original input string
 
-    PartialQuery = ref object
-        # `nextQueries` will never contain more than one element while parsing.
-        # It's used in `optimize(q: Query)` to partialy merge similiar queries.
-        nextQueries: seq[PartialQuery]
-        # Elements which satiesfies these demands are matched by the query.
+    QueryPart = object
         demands: seq[Demand]
-        # Indicates what type of search should be used for `nextQueries`.
         combinator: Combinator
-
-    SearchContext = object
-        options: set[QueryOption]
-        position: NodeWithParent
-        combinator: Combinator
-        single: bool
 
 {.deprecated: [NimqueryOption: QueryOption].}
 
@@ -159,16 +147,12 @@ const CombinatorKinds = {
 }
 
 proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
-proc `$`(q: PartialQuery): string {. noSideEffect .}
 proc parseHtmlQuery*(queryString: string,
                      options: set[QueryOption] = DefaultQueryOptions): Query
 
 template log(msg: string): typed =
     when DEBUG:
         echo msg
-
-proc indent(str, space: string): string =
-    result = str.replace("\n", "\n" & space)
 
 proc safeCharCompare(str: string, idx: int, cs: set[char]): bool {. inline .} =
     if idx > high(str): return false
@@ -180,14 +164,6 @@ proc safeCharCompare(str: string, idx: int, c: char): bool {. inline .} =
 
 proc node(pair: NodeWithParent): XmlNode =
     return pair.parent[pair.index]
-
-proc `$`(comb: Combinator): string =
-    case comb
-    of cmDescendants: return " "
-    of cmNextSibling: return " + "
-    of cmSiblings: return " ~ "
-    of cmChildren: return " > "
-    of cmLeaf: return ""
 
 proc attrComparerString(kind: TokenKind): string =
     case kind
@@ -209,7 +185,7 @@ proc newUnexpectedCharacterException(c: char): ref ParseError =
 proc newParseException(q: string): ref ParseError =
     return newException(ParseError, "Failed to parse HTML query '" & q & "'")
 
-proc initDemand(kind: TokenKind, notQuery: PartialQuery): Demand =
+proc initDemand(kind: TokenKind, notQuery: QueryPart): Demand =
     result.kind = kind
     result.notQuery = notQuery
 
@@ -277,83 +253,10 @@ iterator children(node: XmlNode,
 proc initToken(kind: TokenKind, value: string = ""): Token =
     return Token(kind: kind, value: value)
 
-proc `$`(token: Token): string =
-    result = "[" & $token.kind
-    if token.value.len > 0:
-        result.add " : " & token.value & "]"
-    else:
-        result.add "]"
+proc initQueryPart(demands: seq[Demand], combinator: Combinator): QueryPart =
+    return QueryPart(demands: demands, combinator: combinator)
 
-proc newPartialQuery(demands: seq[Demand],
-                     combinator: Combinator): PartialQuery =
-    return PartialQuery(demands: demands, combinator: combinator)
-
-proc debugToString(q: PartialQuery): string =
-    result = ""
-
-    for idx, d in q.demands:
-        result.add "[" & $d.kind & " " & $d & "]"
-        if idx != high(q.demands):
-            result.add ", "
-
-    if q.nextQueries.len > 0:
-        result.add "\n\t"
-
-        var joined = ""
-        for idx, part in q.nextQueries:
-            joined.add part.debugToString
-            if idx != high(q.nextQueries):
-                joined.add "\n"
-        result.add joined.indent "\t"
-
-proc rootStrings(q: PartialQuery): seq[string] =
-    var common = ""
-    var current = q
-
-    common.add current.demands.join("")
-    common.add $current.combinator
-
-    while current.nextQueries.len == 1:
-        current = current.nextQueries[0]
-        common.add current.demands.join("")
-        common.add $current.combinator
-
-    if current.nextQueries.len > 1:
-        result = @[]
-        for part in current.nextQueries:
-            for str in part.rootStrings:
-                result.add common & str
-    else:
-        result = @[common]
-
-proc `$`(q: PartialQuery): string =
-    q.rootStrings.join ", "
-
-proc isIdenticalRoot(q1, q2: PartialQuery): bool =
-    if q1.demands.len != q2.demands.len or q1.combinator != q2.combinator:
-        return false
-
-    for d1 in q1.demands:
-        var found = false
-        for d2 in q2.demands:
-            if d1 == d2:
-                found = true
-
-        if not found:
-            return false
-
-    return true
-
-proc append(q: var PartialQuery, demands: seq[Demand], combinator: Combinator) =
-    if q.isNil:
-        q = newPartialQuery(demands, combinator)
-    else:
-        var itr = q
-        while itr.nextQueries.len > 0:
-            itr = itr.nextQueries[0]
-        itr.nextQueries = @[ newPartialQuery(demands, combinator) ]
-
-proc canFindMultiple(q: PartialQuery, comb: Combinator,
+proc canFindMultiple(q: Querypart, comb: Combinator,
                      options: set[QueryOption]): bool =
     # Returns true if the current queries demands can be satisfied by
     # multiple elements. This is used to check if the search should stop
@@ -370,72 +273,14 @@ proc canFindMultiple(q: PartialQuery, comb: Combinator,
     return true
 
 proc `$`*(q: Query): string =
-    result = q.roots.join "\n"
-
-proc debugToString(q: Query): string =
-    result = ""
-    for idx, root in q.roots:
-        result.add root.debugToString
-        if idx != high(q.roots):
-            result.add "\n"
-
-proc optimize(query: var Query) =
-    # Optimizes similiar looking root queries (created with the comma operator)
-    # by partially merging them. This way, the common part of the qoot queries
-    # only has to be searched for once.
-    # E.g in the query `div p, div a` all div elements only needs to be found once.
-    #
-    # This implementation is not perfect, but it might be good enough.
-    # It prioritizes merging roots to the start of the root list,
-    # which is arbitrary (but predictable).
-    # The best optimization is dependent on the structure of the HTML
-    # document being queried anyway so I don't think it matters.
-    #
-    # It doesn't optimize partials with different combinators,
-    # e.g `div > p, div a` isn't optimized.
-    # This might be easy enough to fix that it's worth it,
-    # but it's a rare enough case that I don't care for now.
-
-    if query.roots.len == 1: return
-
-    var mergeToIdx = 0
-    var mergeFromIdx = 1
-
-    while mergeToIdx < high(query.roots):
-        if isIdenticalRoot(query.roots[mergeFromIdx], query.roots[mergeToIdx]):
-
-            var qFrom = query.roots[mergeFromIdx]
-            var qTo = query.roots[mergeToIdx]
-
-            while isIdenticalRoot(qFrom.nextQueries[0], qTo.nextQueries[0]):
-                qFrom = qFrom.nextQueries[0]
-                qTo = qTo.nextQueries[0]
-
-            qTo.nextQueries.add qFrom.nextQueries
-            query.roots.delete mergeFromIdx
-
-        else:
-            mergeFromIdx.inc
-
-        if mergeFromIdx > high(query.roots):
-            mergeToIdx.inc
-            mergeFromIdx = mergeToIdx + 1
+    ## Returns the original input string used to construct the query
+    result = q.queryStr
 
 proc isValidNotQuery(q: Query, options: set[QueryOption]): bool =
     return
-        q.roots.len == 1 and
-        q.roots[0].nextQueries.len == 0 and
-        (q.roots[0].demands.len == 1 or not (optSimpleNot in options))
-
-proc initSearchContext(pos: NodeWithParent, comb: Combinator, single: bool,
-                       options: set[QueryOption]): SearchContext =
-    SearchContext(position: pos, combinator: comb,
-        options: options, single: single)
-
-proc forward(ctx: SearchContext, pos: NodeWithParent,
-             comb: Combinator): SearchContext =
-    # Create the next context state, going forward in the search
-    initSearchContext(pos, comb, ctx.single, ctx.options)
+        q.queries.len == 1 and
+        q.queries[0].len == 1 and
+        (q.queries[0][0].demands.len == 1 or not (optSimpleNot in options))
 
 proc readNumerics(input: string, idx: var int, buffer: var string) =
     while idx <= input.high and input[idx] in Digits:
@@ -925,7 +770,7 @@ proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
 
     return true
 
-iterator searchDescendants(queryRoot: PartialQuery,
+iterator searchDescendants(queryPart: QueryPart,
                            position: NodeWithParent): NodeWithParent =
     var queue = initDeque[NodeWithParent]()
     for nodeData in position.node.children:
@@ -934,70 +779,77 @@ iterator searchDescendants(queryRoot: PartialQuery,
 
     while queue.len > 0:
         let pair = queue.popFirst()
-        if pair.satisfies queryRoot.demands:
+        if pair.satisfies queryPart.demands:
             yield pair
 
         for nodeData in pair.node.children:
             queue.addLast((parent: pair.node, index: nodeData.index,
                 elementIndex: nodeData.elementIndex))
 
-iterator searchChildren(queryRoot: PartialQuery,
+iterator searchChildren(queryPart: QueryPart,
                         position: NodeWithParent): NodeWithParent =
     for pair in position.node.children:
-        if pair.satisfies queryRoot.demands:
+        if pair.satisfies queryPart.demands:
             yield pair
 
-iterator searchSiblings(queryRoot: PartialQuery,
+iterator searchSiblings(queryPart: QueryPart,
                         position: NodeWithParent): NodeWithParent =
     for pair in position.parent.children(offset = position):
-        if pair.satisfies queryRoot.demands:
+        if pair.satisfies queryPart.demands:
             yield pair
 
-iterator searchNextSibling(queryRoot: PartialQuery,
+iterator searchNextSibling(queryPart: QueryPart,
                            position: NodeWithParent): NodeWithParent =
     # It's a bit silly to have an iterator which will only yield 0 or 1
     # element, but it's nice for consistency with how the other
     # combinators are implemented.
 
     for pair in position.parent.children(offset = position):
-        if pair.satisfies queryRoot.demands:
+        if pair.satisfies queryPart.demands:
             yield pair
         break # by definition, there can only be one next sibling
 
-type SearchIterator = iterator(q: PartialQuery,
+type SearchIterator = iterator(q: QueryPart,
                                p: NodeWithParent): NodeWithParent {.inline.}
 
-proc execRecursive(queryRoot: PartialQuery, context: SearchContext,
-                   output: var seq[XmlNode]) =
-    var position = context.position
+proc exec(parts: seq[QueryPart],
+          root: NodeWithParent,
+          single: bool,
+          options: set[QueryOption],
+          result: var seq[XmlNode]) =
+    var combinator = cmDescendants
+    var buffer = initDeque[NodeWithParent]()
+    var partIndex = 0
+    buffer.addLast root
 
-    template search(itr: SearchIterator): typed =
-        for next in itr(queryRoot, position):
-            if queryRoot.nextQueries.len == 0:
-                output.add next.node
+    template search(position: NodeWithParent, itr: SearchIterator): typed =
+        for next in itr(parts[partIndex], position):
+            if partIndex == high(parts):
+                result.add next.node
+                if single:
+                    return
             else:
-                for subquery in queryRoot.nextQueries:
-                    let newContext = context.forward(next, queryRoot.combinator)
-                    subquery.execRecursive(newContext, output)
+                buffer.addLast next
 
-            if context.single and output.len > 0:
-                break
-            # TODO: This should only be checked once?
-            if not queryRoot.canFindMultiple(context.combinator,
-                    context.options):
+            if not parts[partIndex].canFindMultiple(combinator, options):
                 break
 
-    case context.combinator
-    of cmDescendants: search(searchDescendants)
-    of cmChildren:    search(searchChildren)
-    of cmSiblings:    search(searchSiblings)
-    of cmNextSibling: search(searchNextSibling)
-    of cmLeaf: discard
+    while buffer.len > 0:
+        for _ in 0..<buffer.len:
+            let position = buffer.popFirst
+            case combinator
+            of cmDescendants: search(position, searchDescendants)
+            of cmChildren:    search(position, searchChildren)
+            of cmSiblings:    search(position, searchSiblings)
+            of cmNextSibling: search(position, searchNextSibling)
+            of cmLeaf: discard
+
+        combinator = parts[partIndex].combinator
+        partIndex.inc
 
 template DQO: untyped = DefaultQueryOptions
 
-proc exec*(query: Query, root: XmlNode,
-        single: bool): seq[XmlNode] =
+proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode] =
     ## Execute an already parsed query. If `single = true`,
     ## it will never return more than one element.
     result = newSeq[XmlNode]()
@@ -1010,33 +862,32 @@ proc exec*(query: Query, root: XmlNode,
     # we also add a wrapper-root element.
     let wrapper = <>wrapper(root)
     let wRoot = (parent: <>"wrapper-root"(wrapper), index: 0, elementIndex: 0)
-    for queryRoot in query.roots:
-        let context = initSearchContext(wRoot, cmDescendants, single,
-            query.options)
-        queryRoot.execRecursive(context, result)
+    for parts in query.queries:
+        parts.exec(wRoot, single, query.options, result)
 
 proc parseHtmlQuery*(queryString: string,
-        options: set[QueryOption] = DQO): Query =
+                     options: set[QueryOption] = DQO): Query =
     ## Parses a query for later use.
     ## Raises `ParseError` if parsing of `queryString` fails.
-    result.roots = @[]
-    var queryRoot: PartialQuery = nil
-    var demandBuffer = newSeq[Demand]()
+    result.queries = @[]
+    result.queryStr = queryString
+    var parts = newSeq[QueryPart]()
+    var demands = newSeq[Demand]()
     var lexer = initLexer(queryString, options)
 
     while true:
         case lexer.current.kind
 
         of tkClass:
-            demandBuffer.add initAttributeDemand(tkAttributeItem, "class",
+            demands.add initAttributeDemand(tkAttributeItem, "class",
                 lexer.eat(tkIdentifier).value)
 
         of tkId:
-            demandBuffer.add initAttributeDemand(tkAttributeExact, "id",
+            demands.add initAttributeDemand(tkAttributeExact, "id",
                 lexer.eat(tkIdentifier).value)
 
         of tkElement:
-            demandBuffer.add initDemand(tkElement, lexer.current.value)
+            demands.add initDemand(tkElement, lexer.current.value)
 
         of tkBracketStart:
             let f = lexer.eat(tkIdentifier)
@@ -1045,17 +896,17 @@ proc parseHtmlQuery*(queryString: string,
             of AttributeKinds - { tkAttributeExists }:
                 discard lexer.eat(nkind)
                 let v = lexer.eat({ tkIdentifier, tkString })
-                demandBuffer.add initAttributeDemand(nkind, f.value, v.value)
+                demands.add initAttributeDemand(nkind, f.value, v.value)
                 discard lexer.eat(tkBracketEnd)
             of tkBracketEnd:
-                demandBuffer.add initAttributeDemand(tkAttributeExists,
+                demands.add initAttributeDemand(tkAttributeExists,
                     f.value, "")
                 discard lexer.eat(tkBracketEnd)
             else:
                 raise newParseException(queryString)
 
         of PseudoNoParamsKinds:
-            demandBuffer.add initPseudoDemand(lexer.current.kind)
+            demands.add initPseudoDemand(lexer.current.kind)
 
         of PseudoParamsKinds:
             let pseudoKind = lexer.current.kind
@@ -1070,21 +921,21 @@ proc parseHtmlQuery*(queryString: string,
                         ":not argument must be a simple selector, but " &
                         "was '" & params.value & "'")
 
-                demandBuffer.add initDemand(tkPseudoNot, notQuery.roots[0])
+                demands.add initDemand(tkPseudoNot, notQuery.queries[0][0])
             of NthKinds:
                 let (a, b) = parsePseudoNthArguments(params.value)
-                demandBuffer.add initPseudoDemand(pseudoKind, a, b)
+                demands.add initPseudoDemand(pseudoKind, a, b)
             else: doAssert(false) # can't happen
 
         of CombinatorKinds:
-            queryRoot.append demandBuffer, lexer.current.kind.Combinator
-            demandBuffer = @[]
+            parts.add initQueryPart(demands, lexer.current.kind.Combinator)
+            demands = @[]
 
         of tkComma:
-            queryRoot.append demandBuffer, cmLeaf
-            result.roots.add queryRoot
-            demandBuffer = @[]
-            queryRoot = nil
+            parts.add initQueryPart(demands, cmLeaf)
+            result.queries.add parts
+            demands = @[]
+            parts = @[]
 
         of tkIdentifier, tkString, tkBracketEnd,
                 tkParam, tkInvalid, AttributeKinds:
@@ -1095,13 +946,12 @@ proc parseHtmlQuery*(queryString: string,
 
         lexer.forward()
 
-    queryRoot.append demandBuffer, cmLeaf
-    result.roots.add queryRoot
-    result.optimize
+    parts.add initQuerypart(demands, cmLeaf)
+    result.queries.add parts
     result.options = options
 
     log "\ninput: \n" & queryString
-    log "\nquery: \n" & result.debugToString
+    # log "\nquery: \n" & result.debugToString
 
 proc querySelector*(root: XmlNode, queryString: string,
         options: set[QueryOption] = DQO): XmlNode =

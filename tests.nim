@@ -508,7 +508,7 @@ test "comma operator optimizeable":
 
 test "Query $":
     var qStr = $(parseHtmlQuery("div#foobar"))
-    check(qStr == "div[id='foobar']")
+    check(qStr == "div#foobar")
 
     qStr = $(parseHtmlQuery("div > a, div > p"))
     check(qStr == "div > a, div > p")

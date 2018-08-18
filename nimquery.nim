@@ -1,16 +1,6 @@
 # Spec: https://www.w3.org/TR/css3-selectors/
 
-# TODO:
-#  - If I change PartialQuery.Combinator to indicate combinator of
-#    PartialQuery, it will simplify a lot of things, including
-#    making the comma optimizations better.
-
-import xmltree
-import strutils
-import strtabs
-import unicode
-import math
-import deques
+import std / [xmltree, strutils, strtabs, unicode, math, deques]
 
 const DEBUG = false
 

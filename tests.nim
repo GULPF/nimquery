@@ -1,9 +1,5 @@
+import std / [unittest, xmltree, streams, htmlparser, strtabs]
 import nimquery
-import unittest
-import xmltree
-import streams
-import htmlparser
-import strtabs
 
 const html = """
 <!DOCTYPE html>

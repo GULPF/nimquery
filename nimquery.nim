@@ -406,7 +406,7 @@ proc readParams(input: string, idx: var int, buffer: var string) =
     idx.inc
 
 proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
-    let input = raw.strip
+    let input = strutils.strip(raw)
     if input == "odd":
         return (2, 1)
     elif input == "even":
@@ -626,7 +626,7 @@ proc forward(lexer: var Lexer) =
 
 proc initLexer(input: string, options: set[QueryOption]): Lexer =
     # TODO: Get rid of strip
-    result.input = input.strip
+    result.input = strutils.strip(input)
     result.pos = 0
     result.options = options
     forward(result)

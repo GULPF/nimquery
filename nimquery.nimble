@@ -10,7 +10,7 @@ skipFiles = @["tests.nim"]
 requires "nim >= 0.18.0"
 
 task test, "Run the tests":
-    exec "nim c -r tests/tests"
-    rmFile "tests/tests"
     exec "nim c -r tests/incltests"
     rmFile "tests/incltests"
+    exec "nim c -r tests/tests"
+    rmFile "tests/tests"

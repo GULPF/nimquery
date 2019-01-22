@@ -112,15 +112,15 @@ type
 
 {.deprecated: [NimqueryOption: QueryOption].}
 
-const DefaultQueryOptions* = { optUniqueIds, optUnicodeIdentifiers,
-    optSimpleNot }
+const DefaultQueryOptions* = {optUniqueIds, optUnicodeIdentifiers,
+    optSimpleNot}
 const NimqueryDefaultOptions* {.deprecated.} = DefaultQueryOptions
 
-const Identifiers = Letters + Digits + { '-', '_', '\\' }
+const Identifiers = Letters + Digits + {'-', '_', '\\'}
 # NOTE: This is not the same as `strutils.Whitespace`.
 #       These values are defined by spec.
-const CssWhitespace = { '\x20', '\x09', '\x0A', '\x0D', '\x0C' }
-const Combinators = CssWhitespace + {  '+', '~', '>' }
+const CssWhitespace = {'\x20', '\x09', '\x0A', '\x0D', '\x0C'}
+const Combinators = CssWhitespace + {'+', '~', '>'}
 
 const PseudoNoParamsKinds = {
     tkPseudoFirstOfType, tkPseudoLastOfType,
@@ -129,7 +129,7 @@ const PseudoNoParamsKinds = {
     tkPseudoLastChild
 }
 
-const PseudoParamsKinds = NthKinds + { tkPseudoNot }
+const PseudoParamsKinds = NthKinds + {tkPseudoNot}
 
 const CombinatorKinds = {
     tkCombinatorChildren, tkCombinatorDescendents,
@@ -140,13 +140,13 @@ template log(msg: string): typed =
     when DEBUG:
         echo msg
 
-proc safeCharCompare(str: string, idx: int, cs: set[char]): bool {. inline .} =
+proc safeCharCompare(str: string, idx: int, cs: set[char]): bool {.inline.} =
     if idx > high(str): return false
     if idx < low(str): return false
     return str[idx] in cs
 
-proc safeCharCompare(str: string, idx: int, c: char): bool {. inline .} =
-    return str.safeCharCompare(idx, { c })
+proc safeCharCompare(str: string, idx: int, c: char): bool {.inline.} =
+    return str.safeCharCompare(idx, {c})
 
 proc node(pair: NodeWithParent): XmlNode =
     return pair.parent[pair.index]
@@ -200,9 +200,9 @@ proc `$`(demand: Demand): string =
     of tkPseudoNot:
         result = ":" & $demand.kind & "(" & $demand.notQuery & ")"
     of NthKinds:
-        result =  ":" & $demand.kind & "(" & $demand.a & "n, " & $demand.b & ")"
+        result = ":" & $demand.kind & "(" & $demand.a & "n, " & $demand.b & ")"
     of PseudoNoParamsKinds:
-        result  = ":" & $demand.kind
+        result = ":" & $demand.kind
     of tkElement:
         result = demand.element
     else:
@@ -248,9 +248,9 @@ proc canFindMultiple(q: Querypart, comb: Combinator,
         if optUniqueIds in options and demand.kind in AttributeKinds and
                 demand.attrName == "id":
             return false
-        if comb in { cmChildren, cmSiblings } and demand.kind in
-                { tkPseudoFirstOfType, tkPseudoLastOfType,
-                    tkPseudoFirstChild, tkPseudoLastChild, tkPseudoOnlyOfType }:
+        if comb in {cmChildren, cmSiblings} and demand.kind in
+                {tkPseudoFirstOfType, tkPseudoLastOfType,
+                    tkPseudoFirstChild, tkPseudoLastChild, tkPseudoOnlyOfType}:
             return false
 
     return true
@@ -270,7 +270,7 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
     idx.inc
 
     # Linefeed, carriage return and form feed can't be escaped.
-    if input[idx] in { '\x0C', '\x0D', '\x0A'}:
+    if input[idx] in {'\x0C', '\x0D', '\x0A'}:
         raise newUnexpectedCharacterException(input[idx])
 
     # No special handling is required for these.
@@ -299,7 +299,7 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
             raiseAssert "Can't happen"
 
 proc readStringLiteral(input: string, idx: var int, buffer: var string) =
-    assert input[idx] in { '\'', '"' }
+    assert input[idx] in {'\'', '"'}
 
     let ch = input[idx]
     idx.inc
@@ -326,7 +326,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
     if input[idx] == '_' or
             input[idx] in Digits or
             (input[idx] == '-' and
-                input.safeCharCompare(idx + 1, { '-' } + Digits)):
+                input.safeCharCompare(idx + 1, {'-'} + Digits)):
         raise newUnexpectedCharacterException(input[idx + 1])
 
     proc isValidIdentifier(rune: Rune): bool =
@@ -350,7 +350,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
             buffer.add unicodeCh
 
 proc readIdentifierAscii(input: string, idx: var int, buffer: var string) =
-    if input[idx] == '-' and input.safeCharCompare(idx + 1, { '-' } + Digits):
+    if input[idx] == '-' and input.safeCharCompare(idx + 1, {'-'} + Digits):
         raise newUnexpectedCharacterException(input[idx + 1])
 
     while input[idx] in Identifiers and idx < input.len:
@@ -443,7 +443,7 @@ proc parsePseudoNthArguments(input: string): tuple[a: int, b: int] =
                     idx.inc
                 result.b = takeInt()
             else:
-                discard # done, only a was specified
+                discard # done, only "a" was specified
         else:
             result.b = takeInt()
 
@@ -472,9 +472,9 @@ proc initPseudoToken(str: string): Token =
 proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     # Checks if the last two tokens represents the end of a simple selector.
     # This is needed to determine if a space is significant or not.
-    if prev.kind in { tkBracketEnd, tkParam, tkElement } + PseudoNoParamsKinds:
+    if prev.kind in {tkBracketEnd, tkParam, tkElement} + PseudoNoParamsKinds:
         return true
-    if prev.kind == tkIdentifier and prevPrev.kind in { tkClass, tkId }:
+    if prev.kind == tkIdentifier and prevPrev.kind in {tkClass, tkId}:
         return true
 
 proc forward(lexer: var Lexer) =
@@ -490,7 +490,7 @@ proc forward(lexer: var Lexer) =
 
     case ch:
 
-    of { '"', '\'' }:
+    of {'"', '\''}:
         var buffer = ""
         readStringLiteral(lexer.input, lexer.pos, buffer)
         token = initToken(tkString, buffer)
@@ -597,7 +597,7 @@ proc forward(lexer: var Lexer) =
             let rune = lexer.input.runeAt(lexer.pos)
             raise newUnexpectedCharacterException($rune)
 
-        if lexer.next.kind in CombinatorKinds + { tkComma, tkInvalid }:
+        if lexer.next.kind in CombinatorKinds + {tkComma, tkInvalid}:
             token = initToken(tkElement, buffer.toLowerAscii)
         else:
             token = initToken(tkIdentifier, buffer)
@@ -628,7 +628,7 @@ proc eat(lexer: var Lexer, kind: set[TokenKind]): Token =
     result = lexer.current
 
 proc eat(lexer: var Lexer, kind: TokenKind): Token {.inline.} =
-    lexer.eat({ kind })
+    lexer.eat({kind})
 
 proc hasAttr(node: XmlNode, attr: string): bool {.inline.} =
     return not node.attrs.isNil and node.attrs.hasKey(attr)
@@ -875,9 +875,9 @@ proc parseHtmlQuery*(queryString: string,
                 let f = lexer.eat(tkIdentifier)
                 let nkind = lexer.next.kind
                 case nkind
-                of AttributeKinds - { tkAttributeExists }:
+                of AttributeKinds - {tkAttributeExists}:
                     discard lexer.eat(nkind)
-                    let v = lexer.eat({ tkIdentifier, tkString })
+                    let v = lexer.eat({tkIdentifier, tkString})
                     demands.add initAttributeDemand(nkind, f.value, v.value)
                     discard lexer.eat(tkBracketEnd)
                 of tkBracketEnd:

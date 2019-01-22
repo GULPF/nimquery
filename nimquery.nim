@@ -1,11 +1,11 @@
 # Spec: https://www.w3.org/TR/css3-selectors/
 
-import std / [xmltree, strutils, strtabs, unicode, math, deques]
+import std / [xmltree, strutils, strtabs, unicode, math, deques, parseutils]
 
 const DEBUG = false
 
 type
-    ParseError* = object of Exception
+    ParseError* = object of ValueError
 
     TokenKind = enum
         tkInvalid
@@ -91,9 +91,9 @@ type
     QueryOption* = enum
         optUniqueIds          ## Assume unique id's or not
         optUnicodeIdentifiers ## Allow non-ascii in identifiers (e.g `#exämple`)
-        optSimpleNot          ## Disallow more complex :not selectors.
-                              ## Annoying but that's the spec.
-                              ## Combinators/comma are not allowed even if true.
+        optSimpleNot          ## Only allow simple selectors as the argument
+                              ## for ":not". Combinators and/or commas are not
+                              ## allowed even if this option is excluded.
 
     Lexer = object
         input: string
@@ -136,10 +136,6 @@ const CombinatorKinds = {
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
-proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
-proc parseHtmlQuery*(queryString: string,
-                     options: set[QueryOption] = DefaultQueryOptions): Query
-
 template log(msg: string): typed =
     when DEBUG:
         echo msg
@@ -164,16 +160,13 @@ proc attrComparerString(kind: TokenKind): string =
     of tkAttributeStart: return "^="
     of tkAttributeEnd: return "$="
     of tkAttributeSubstring: return "*="
-    else: raise newException(Exception, "Invalid attr kind: " & $kind)
+    else: raiseAssert "Invalid attr kind: " & $kind
 
 proc newUnexpectedCharacterException(s: string): ref ParseError =
     return newException(ParseError, "Unexpected character: '" & s & "'")
 
 proc newUnexpectedCharacterException(c: char): ref ParseError =
     newUnexpectedCharacterException($c)
-
-proc newParseException(q: string): ref ParseError =
-    return newException(ParseError, "Failed to parse HTML query '" & q & "'")
 
 proc initDemand(kind: TokenKind, notQuery: QueryPart): Demand =
     result.kind = kind
@@ -272,11 +265,6 @@ proc isValidNotQuery(q: Query, options: set[QueryOption]): bool =
         q.queries[0].len == 1 and
         (q.queries[0][0].demands.len == 1 or not (optSimpleNot in options))
 
-proc readNumerics(input: string, idx: var int, buffer: var string) =
-    while idx <= input.high and input[idx] in Digits:
-        buffer.add input[idx]
-        idx.inc
-
 proc readEscape(input: string, idx: var int, buffer: var string) =
     assert input[idx] == '\\'
     idx.inc
@@ -304,8 +292,11 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
         if input[idx] in CssWhitespace:
             idx.inc
 
-        let runeStr = hexStr.parseHexInt.Rune.toUTF8
-        buffer.add runeStr
+        try:
+            let runeStr = hexStr.parseHexInt.Rune.toUTF8
+            buffer.add runeStr
+        except ValueError:
+            raiseAssert "Can't happen"
 
 proc readStringLiteral(input: string, idx: var int, buffer: var string) =
     assert input[idx] in { '\'', '"' }
@@ -405,62 +396,60 @@ proc readParams(input: string, idx: var int, buffer: var string) =
 
     idx.inc
 
-proc parsePseudoNthArguments(raw: string): tuple[a: int, b: int] =
-    let input = strutils.strip(raw)
-    if input == "odd":
-        return (2, 1)
-    elif input == "even":
-        return (2, 0)
+proc parsePseudoNthArguments(input: string): tuple[a: int, b: int] =
+    var buffer = ""
+    var idx = 0
+    idx.inc skipWhile(input, CssWhitespace, idx)
+
+    template takeInt: int =
+        var v: int
+        try:
+            v = buffer.parseInt
+            buffer = ""
+        # NOTE: This branch can only be taken in case of overflow
+        except ValueError as err:
+            raise newException(ParseError, err.msg)
+        v
+
+    if idx + 2 < input.len and input[idx..idx+2].cmpIgnoreCase("odd") == 0:
+        result = (2, 1)
+        idx.inc 3
+    elif idx + 3 < input.len and input[idx..idx+3].cmpIgnoreCase("even") == 0:
+        result = (2, 0)
+        idx.inc 4
     else:
-        var idx = 0
-        var a = ""
-        var b = ""
-        var buffer = ""
-
-        # NOTE: Spacing between first sign and `a` is not allowed.
-        while idx < input.len:
-
-            var allowSpace = true
-
-            case input[idx]
-            of { '+', '-' }:
-                buffer.add $input[idx]
-                # NOTE: Spaces is allowed around second sign,
-                #       but not around first.
-                allowSpace = false
+        if idx < input.len and input[idx] in {'+', '-'}:
+            buffer.add input[idx]
+            idx.inc
+        if idx >= input.len:
+            raise newException(ParseError, "Invalid parameter for ':nth-*'")
+        if input[idx] notin Digits:
+            buffer.add "1"
+        while idx < input.len and input[idx] in Digits:
+            buffer.add input[idx]
+            idx.inc
+        if idx < input.len and input[idx] in {'n', 'N'}:
+            idx.inc
+            result.a = takeInt()
+            idx.inc skipWhile(input, CssWhitespace, idx)
+            if idx < input.len and input[idx] in {'+', '-'}:
+                buffer.add input[idx]
                 idx.inc
-            of Digits:
-                readNumerics input, idx, buffer
-
-                if input.safeCharCompare(idx, 'n'):
-                    if a.len > 0:
-                        raise newUnexpectedCharacterException(input[idx])
-                    a = buffer
-                    idx.inc
-                else:
-                    b = buffer
-                buffer.setLen 0
-                allowSpace = true
-            of 'n':
-                if not a.len > 10:
+                idx.inc skipWhile(input, CssWhitespace, idx)
+                if idx >= input.len or input[idx] notin Digits:
                     raise newUnexpectedCharacterException(input[idx])
-                buffer.add "1"
-                a = buffer
-                idx.inc
-                buffer.setLen 0
-                allowSpace = true
-            of CssWhitespace:
-                if allowSpace:
+                while idx < input.len and input[idx] in Digits:
+                    buffer.add input[idx]
                     idx.inc
-                else:
-                    raise newUnexpectedCharacterException(input[idx])
+                result.b = takeInt()
             else:
-                raise newUnexpectedCharacterException(input[idx])
+                discard # done, only a was specified
+        else:
+            result.b = takeInt()
 
-        if a.len == 0: a = "0"
-        if b.len == 0: b = "0"
-        # Should be safe to parse
-        return (a.parseInt, b.parseInt)
+    idx.inc skipWhile(input, CssWhitespace, idx)
+    if idx <= input.high:
+        raise newUnexpectedCharacterException(input[idx])
 
 proc initPseudoToken(str: string): Token =
     let kind = case str
@@ -477,7 +466,7 @@ proc initPseudoToken(str: string): Token =
     of ":nth-of-type":      tkPseudoNthOfType
     of ":nth-last-of-type": tkPseudoNthLastOfType
     else:
-        raise newException(ParseError, "Unknown pseudo: " & str)
+        raise newException(ParseError, "Unknown pseudo selector: " & str)
     result = initToken(kind)
 
 proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
@@ -549,7 +538,7 @@ proc forward(lexer: var Lexer) =
             buffer.add lexer.input[lexer.pos]
             lexer.pos.inc
 
-        token = initPseudoToken(buffer)
+        token = initPseudoToken(buffer.toLowerAscii)
 
     of '#':
         lexer.pos.inc
@@ -634,14 +623,14 @@ proc initLexer(input: string, options: set[QueryOption]): Lexer =
 
 proc eat(lexer: var Lexer, kind: set[TokenKind]): Token =
     if lexer.next.kind notin kind:
-        raise newParseException(lexer.input)
+        raise newException(ParseError, "")
     lexer.forward()
     result = lexer.current
 
 proc eat(lexer: var Lexer, kind: TokenKind): Token {.inline.} =
     lexer.eat({ kind })
 
-proc hasAttr(node: XmlNode, attr: string): bool {. inline .} =
+proc hasAttr(node: XmlNode, attr: string): bool {.inline.} =
     return not node.attrs.isNil and node.attrs.hasKey(attr)
 
 proc validateNth(a, b, nSiblings: int): bool =
@@ -649,6 +638,9 @@ proc validateNth(a, b, nSiblings: int): bool =
         return nSiblings == b - 1
     let n = (nSiblings - (b - 1)) / a
     return n.floor == n and n >= 0
+
+proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
+               {.raises: [Defect].}
 
 proc satisfies(pair: NodeWithParent, demand: Demand): bool =
     let node = pair.node
@@ -751,13 +743,12 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
 
             return validateNth(demand.a, demand.b, nSiblingsOfTypeAfter)
     else:
-        raise newException(ParseError, "Invalid demand: " & $demand)
+        raiseAssert "Invalid demand: " & $demand
 
 proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
     for demand in demands:
         if not pair.satisfies(demand):
             return false
-
     return true
 
 iterator searchDescendants(queryPart: QueryPart,
@@ -837,9 +828,8 @@ proc exec(parts: seq[QueryPart],
         combinator = parts[partIndex].combinator
         partIndex.inc
 
-template DQO: untyped = DefaultQueryOptions
-
-proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode] =
+proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode]
+           {.raises: [Defect].} =
     ## Execute an already parsed query. If `single = true`,
     ## it will never return more than one element.
     result = newSeq[XmlNode]()
@@ -856,7 +846,8 @@ proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode] =
         parts.exec(wRoot, single, query.options, result)
 
 proc parseHtmlQuery*(queryString: string,
-                     options: set[QueryOption] = DQO): Query =
+                     options: set[QueryOption] = DefaultQueryOptions): Query
+                     {.raises: [Defect, ParseError].} =
     ## Parses a query for later use.
     ## Raises `ParseError` if parsing of `queryString` fails.
     result.queries = @[]
@@ -865,76 +856,84 @@ proc parseHtmlQuery*(queryString: string,
     var demands = newSeq[Demand]()
     var lexer = initLexer(queryString, options)
 
-    while true:
-        case lexer.current.kind
+    try:
+        while true:
+            case lexer.current.kind
 
-        of tkClass:
-            demands.add initAttributeDemand(tkAttributeItem, "class",
-                lexer.eat(tkIdentifier).value)
+            of tkClass:
+                demands.add initAttributeDemand(tkAttributeItem, "class",
+                    lexer.eat(tkIdentifier).value)
 
-        of tkId:
-            demands.add initAttributeDemand(tkAttributeExact, "id",
-                lexer.eat(tkIdentifier).value)
+            of tkId:
+                demands.add initAttributeDemand(tkAttributeExact, "id",
+                    lexer.eat(tkIdentifier).value)
 
-        of tkElement:
-            demands.add initDemand(tkElement, lexer.current.value)
+            of tkElement:
+                demands.add initDemand(tkElement, lexer.current.value)
 
-        of tkBracketStart:
-            let f = lexer.eat(tkIdentifier)
-            let nkind = lexer.next.kind
-            case nkind
-            of AttributeKinds - { tkAttributeExists }:
-                discard lexer.eat(nkind)
-                let v = lexer.eat({ tkIdentifier, tkString })
-                demands.add initAttributeDemand(nkind, f.value, v.value)
-                discard lexer.eat(tkBracketEnd)
-            of tkBracketEnd:
-                demands.add initAttributeDemand(tkAttributeExists,
-                    f.value, "")
-                discard lexer.eat(tkBracketEnd)
+            of tkBracketStart:
+                let f = lexer.eat(tkIdentifier)
+                let nkind = lexer.next.kind
+                case nkind
+                of AttributeKinds - { tkAttributeExists }:
+                    discard lexer.eat(nkind)
+                    let v = lexer.eat({ tkIdentifier, tkString })
+                    demands.add initAttributeDemand(nkind, f.value, v.value)
+                    discard lexer.eat(tkBracketEnd)
+                of tkBracketEnd:
+                    demands.add initAttributeDemand(tkAttributeExists,
+                        f.value, "")
+                    discard lexer.eat(tkBracketEnd)
+                else:
+                    raise newException(ParseError, "")
+
+            of PseudoNoParamsKinds:
+                demands.add initPseudoDemand(lexer.current.kind)
+
+            of PseudoParamsKinds:
+                let pseudoKind = lexer.current.kind
+                let params = lexer.eat(tkParam)
+                case pseudoKind
+                of tkPseudoNot:
+                    # Not the cleanest way to this, but eh
+                    let notQuery = parseHtmlQuery(params.value, options)
+
+                    if not notQuery.isValidNotQuery(options):
+                        raise newException(ParseError,
+                            ":not argument must be a simple selector, but " &
+                            "was '" & params.value & "'")
+
+                    demands.add initDemand(tkPseudoNot, notQuery.queries[0][0])
+                of NthKinds:
+                    let (a, b) = parsePseudoNthArguments(params.value)
+                    demands.add initPseudoDemand(pseudoKind, a, b)
+                else: doAssert(false) # can't happen
+
+            of CombinatorKinds:
+                parts.add initQueryPart(demands, lexer.current.kind.Combinator)
+                demands = @[]
+
+            of tkComma:
+                parts.add initQueryPart(demands, cmLeaf)
+                result.queries.add parts
+                demands = @[]
+                parts = @[]
+
+            of tkIdentifier, tkString, tkBracketEnd,
+                    tkParam, tkInvalid, AttributeKinds:
+                raise newException(ParseError, "")
+
+            of tkEoi:
+                break
+
+            lexer.forward()
+    except ParseError as err:
+        let msg =
+            if err.msg == "":
+                "Failed to parse CSS query '" & queryString & "'"
             else:
-                raise newParseException(queryString)
-
-        of PseudoNoParamsKinds:
-            demands.add initPseudoDemand(lexer.current.kind)
-
-        of PseudoParamsKinds:
-            let pseudoKind = lexer.current.kind
-            let params = lexer.eat(tkParam)
-            case pseudoKind
-            of tkPseudoNot:
-                # Not the cleanest way to this, but eh
-                let notQuery = parseHtmlQuery(params.value, options)
-
-                if not notQuery.isValidNotQuery(options):
-                    raise newException(ParseError,
-                        ":not argument must be a simple selector, but " &
-                        "was '" & params.value & "'")
-
-                demands.add initDemand(tkPseudoNot, notQuery.queries[0][0])
-            of NthKinds:
-                let (a, b) = parsePseudoNthArguments(params.value)
-                demands.add initPseudoDemand(pseudoKind, a, b)
-            else: doAssert(false) # can't happen
-
-        of CombinatorKinds:
-            parts.add initQueryPart(demands, lexer.current.kind.Combinator)
-            demands = @[]
-
-        of tkComma:
-            parts.add initQueryPart(demands, cmLeaf)
-            result.queries.add parts
-            demands = @[]
-            parts = @[]
-
-        of tkIdentifier, tkString, tkBracketEnd,
-                tkParam, tkInvalid, AttributeKinds:
-            raise newParseException(queryString)
-
-        of tkEoi:
-            break
-
-        lexer.forward()
+                "Failed to parse CSS query '" & queryString & "': " & err.msg
+        raise newException(ParseError, msg)
 
     parts.add initQuerypart(demands, cmLeaf)
     result.queries.add parts
@@ -944,7 +943,8 @@ proc parseHtmlQuery*(queryString: string,
     # log "\nquery: \n" & result.debugToString
 
 proc querySelector*(root: XmlNode, queryString: string,
-        options: set[QueryOption] = DQO): XmlNode =
+                    options: set[QueryOption] = DefaultQueryOptions): XmlNode
+                    {.raises: [Defect, ParseError].} =
     ## Get the first element matching `queryString`,
     ## or `nil` if no such element exists.
     ## Raises `ParseError` if parsing of `queryString` fails.
@@ -956,7 +956,8 @@ proc querySelector*(root: XmlNode, queryString: string,
         nil
 
 proc querySelectorAll*(root: XmlNode, queryString: string,
-        options: set[QueryOption] = DQO): seq[XmlNode] =
+                       options: set[QueryOption] = DefaultQueryOptions):
+                       seq[XmlNode] {.raises: [Defect, ParseError].} =
     ## Get all elements matching `queryString`.
     ## Raises `ParseError` if parsing of `queryString` fails.
     let query = parseHtmlQuery(queryString, options)

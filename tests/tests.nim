@@ -1,5 +1,5 @@
 import std / [unittest, xmltree, streams, htmlparser, strtabs]
-import nimquery
+import ../nimquery
 
 const html = """
 <!DOCTYPE html>
@@ -344,6 +344,8 @@ test "pseudo :only-of-type":
     var el = xml.querySelector(".test24-case1:only-of-type")
     check(el.isNil)
     el = xml.querySelector(".test24-case2:only-of-type")
+    check(not el.isNil)
+    el = xml.querySelector(".test24-case2:ONLY-OF-TYPE")
     check(not el.isNil)
     el = xml.querySelector(".test24-case3:only-of-type")
     check(not el.isNil)

@@ -1,48 +1,37 @@
 # Nimquery
 A library for querying HTML using CSS selectors, like JavaScripts `document.querySelector`/`document.querySelectorAll`.
 
+## Installation
+
+`nimquery` is available on Nimble:
+```
+nimble install nimquery
+```
+
 ## Usage
 ```nim
-import xmltree
-import htmlparser
-import streams
+from xmltree import `$`
+from htmlparser import parseHtml
+from streams import newStringStream
 import nimquery
 
 let html = """
 <!DOCTYPE html>
-  <html>
-    <head><title>Example</title></head>
-    <body>
-      <p>1</p>
-      <p>2</p>
-      <p>3</p>
-      <p>4</p>
-    </body>
-  </html>
+<html>
+  <head><title>Example</title></head>
+  <body>
+    <p>1</p>
+    <p>2</p>
+    <p>3</p>
+    <p>4</p>
+  </body>
+</html>
 """
 let xml = parseHtml(newStringStream(html))
 let elements = xml.querySelectorAll("p:nth-child(odd)")
 echo elements
 # => @[<p>1</p>, <p>3</p>]
 ```
-
-## Supported selectors
-Nimquery supports all combinators, the comma operator and all [CSS3 selectors](https://www.w3.org/TR/css3-selectors) except the following (most of which have no meaning in a headless context):
-- :root
-- :link
-- :visited
-- :active
-- :hover
-- :focus
-- :target
-- :lang(...)
-- :enabled
-- :disabled
-- :checked
-- ::first-line 
-- ::first-letter
-- ::before
-- ::after 
 
 ## API
 
@@ -120,3 +109,6 @@ let elements = xml.querySelectorAll("p:not(.maybe-skip:nth-child(even))", option
 echo elements
 # => @[<p>1</p>, <p class="maybe-skip">3</p>, <p>4</p>]
 ```
+
+## Unsupported selectors
+Nimquery supports all [CSS3 selectors](https://www.w3.org/TR/css3-selectors) except the following: `:root`, `:link`, `:visited`, `:active`, `:hover`, `:focus`, `:target`, `:lang(...)`, `:enabled`, `:disabled`, `:checked`, `::first-line`, `::first-letter`, `::before`, `::after`. These selectors will not be implemented because they don't make much sense in the situations where Nimquery is useful.

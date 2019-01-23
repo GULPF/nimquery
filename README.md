@@ -3,7 +3,7 @@ A library for querying HTML using CSS selectors, like JavaScripts `document.quer
 
 ## Installation
 
-`nimquery` is available on Nimble:
+Nimquery is available on Nimble:
 ```
 nimble install nimquery
 ```

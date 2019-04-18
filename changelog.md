@@ -1,3 +1,7 @@
+Version 1.2.1 (2019-04-18)
+=============
+- Fixed #3
+
 Version 1.2.0 (2019-01-23)
 =============
 - Improved error handling:

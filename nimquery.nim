@@ -640,7 +640,7 @@ proc validateNth(a, b, nSiblings: int): bool =
     return n.floor == n and n >= 0
 
 proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
-               {.raises: [Defect].}
+               {.raises: [Defect], gcsafe.}
 
 proc satisfies(pair: NodeWithParent, demand: Demand): bool =
     let node = pair.node

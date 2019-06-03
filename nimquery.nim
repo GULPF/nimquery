@@ -136,7 +136,7 @@ const CombinatorKinds = {
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
-template log(msg: string): typed =
+template log(msg: string) =
     when DEBUG:
         echo msg
 
@@ -803,7 +803,7 @@ proc exec(parts: seq[QueryPart],
     var partIndex = 0
     buffer.addLast root
 
-    template search(position: NodeWithParent, itr: SearchIterator): typed =
+    template search(position: NodeWithParent, itr: SearchIterator) =
         for next in itr(parts[partIndex], position):
             if partIndex == high(parts):
                 result.add next.node

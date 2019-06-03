@@ -169,23 +169,23 @@ proc newUnexpectedCharacterException(c: char): ref ParseError =
     newUnexpectedCharacterException($c)
 
 proc initDemand(kind: TokenKind, notQuery: QueryPart): Demand =
-    result.kind = kind
+    result = Demand(kind: kind)
     result.notQuery = notQuery
 
 proc initDemand(kind: TokenKind, element: string): Demand =
-    result.kind = kind
+    result = Demand(kind: kind)
     result.element = element
 
 proc initPseudoDemand(kind: TokenKind): Demand =
-    result.kind = kind
+    result = Demand(kind: kind)
 
 proc initAttributeDemand(kind: TokenKind, attrName, attrValue: string): Demand =
-    result.kind = kind
+    result = Demand(kind: kind)
     result.attrName = attrName
     result.attrValue = attrValue
 
 proc initPseudoDemand(kind: TokenKind, a, b: int): Demand =
-    result.kind = kind
+    result = Demand(kind: kind)
     result.a = a
     result.b = b
 

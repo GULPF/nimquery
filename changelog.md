@@ -1,3 +1,7 @@
+Version 1.2.2 (2019-06-30)
+=============
+- Fixed compatibility with Nim v0.20.0
+
 Version 1.2.1 (2019-04-18)
 =============
 - Fixed #3

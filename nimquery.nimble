@@ -1,13 +1,13 @@
 # Package
 
-version       = "1.2.1"
+version       = "1.2.2"
 author        = "Oscar Nihlgård"
 description   = "Library for querying HTML using CSS-selectors (like JavaScripts document.querySelector)"
 license       = "MIT"
 
 skipDirs = @["tests"]
 
-requires "nim >= 0.19.2"
+requires "nim >= 0.20.0"
 
 task test, "Run the tests":
     exec "nim c -r tests/incltests"

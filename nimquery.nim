@@ -136,7 +136,7 @@ const CombinatorKinds = {
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
-template log(msg: string): typed =
+template log(msg: string) =
     when DEBUG:
         echo msg
 
@@ -168,26 +168,28 @@ proc newUnexpectedCharacterException(s: string): ref ParseError =
 proc newUnexpectedCharacterException(c: char): ref ParseError =
     newUnexpectedCharacterException($c)
 
-proc initDemand(kind: TokenKind, notQuery: QueryPart): Demand =
-    result = Demand(kind: kind)
-    result.notQuery = notQuery
+proc initNotDemand(notQuery: QueryPart): Demand =
+    result = Demand(kind: tkPseudoNot, notQuery: notQuery)
 
-proc initDemand(kind: TokenKind, element: string): Demand =
-    result = Demand(kind: kind)
-    result.element = element
+proc initElementDemand(element: string): Demand =
+    result = Demand(kind: tkElement, element: element)
 
 proc initPseudoDemand(kind: TokenKind): Demand =
     result = Demand(kind: kind)
 
-proc initAttributeDemand(kind: TokenKind, attrName, attrValue: string): Demand =
-    result = Demand(kind: kind)
-    result.attrName = attrName
-    result.attrValue = attrValue
+proc initAttributeDemand(kind: TokenKind, name, value: string): Demand =
+    case kind
+    of AttributeKinds:
+        result = Demand(kind: kind, attrName: name, attrValue: value)
+    else:
+        raiseAssert "invalid kind: " & $kind
 
-proc initPseudoDemand(kind: TokenKind, a, b: int): Demand =
-    result = Demand(kind: kind)
-    result.a = a
-    result.b = b
+proc initNthChildDemand(kind: TokenKind, a, b: int): Demand =
+    case kind
+    of NthKinds:
+        result = Demand(kind: kind, a: a, b: b)
+    else:
+        raiseAssert "invalid kind: " & $kind
 
 proc `$`(demand: Demand): string =
     case demand.kind:
@@ -803,7 +805,7 @@ proc exec(parts: seq[QueryPart],
     var partIndex = 0
     buffer.addLast root
 
-    template search(position: NodeWithParent, itr: SearchIterator): typed =
+    template search(position: NodeWithParent, itr: SearchIterator) =
         for next in itr(parts[partIndex], position):
             if partIndex == high(parts):
                 result.add next.node
@@ -869,7 +871,7 @@ proc parseHtmlQuery*(queryString: string,
                     lexer.eat(tkIdentifier).value)
 
             of tkElement:
-                demands.add initDemand(tkElement, lexer.current.value)
+                demands.add initElementDemand(lexer.current.value)
 
             of tkBracketStart:
                 let f = lexer.eat(tkIdentifier)
@@ -903,10 +905,10 @@ proc parseHtmlQuery*(queryString: string,
                             ":not argument must be a simple selector, but " &
                             "was '" & params.value & "'")
 
-                    demands.add initDemand(tkPseudoNot, notQuery.queries[0][0])
+                    demands.add initNotDemand(notQuery.queries[0][0])
                 of NthKinds:
                     let (a, b) = parsePseudoNthArguments(params.value)
-                    demands.add initPseudoDemand(pseudoKind, a, b)
+                    demands.add initNthChildDemand(pseudoKind, a, b)
                 else: doAssert(false) # can't happen
 
             of CombinatorKinds:

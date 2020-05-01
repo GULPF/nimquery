@@ -1,4 +1,4 @@
-# Nimquery
+# Nimquery ![CI](https://github.com/GULPF/nimquery/workflows/CI/badge.svg)
 A library for querying HTML using CSS selectors, like JavaScripts `document.querySelector`/`document.querySelectorAll`.
 
 ## Installation

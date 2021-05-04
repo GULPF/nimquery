@@ -140,18 +140,18 @@ template log(msg: string) =
     when DEBUG:
         echo msg
 
-proc safeCharCompare(str: string, idx: int, cs: set[char]): bool {.inline.} =
+func safeCharCompare(str: string, idx: int, cs: set[char]): bool {.inline.} =
     if idx > high(str): return false
     if idx < low(str): return false
     return str[idx] in cs
 
-proc safeCharCompare(str: string, idx: int, c: char): bool {.inline.} =
+func safeCharCompare(str: string, idx: int, c: char): bool {.inline.} =
     return str.safeCharCompare(idx, {c})
 
-proc node(pair: NodeWithParent): XmlNode =
+func node(pair: NodeWithParent): XmlNode =
     return pair.parent[pair.index]
 
-proc attrComparerString(kind: TokenKind): string =
+func attrComparerString(kind: TokenKind): string =
     case kind
     of tkAttributeExact: return "="
     of tkAttributeItem: return "~="
@@ -162,36 +162,36 @@ proc attrComparerString(kind: TokenKind): string =
     of tkAttributeSubstring: return "*="
     else: raiseAssert "Invalid attr kind: " & $kind
 
-proc newUnexpectedCharacterException(s: string): ref ParseError =
+func newUnexpectedCharacterException(s: string): ref ParseError =
     return newException(ParseError, "Unexpected character: '" & s & "'")
 
-proc newUnexpectedCharacterException(c: char): ref ParseError =
+func newUnexpectedCharacterException(c: char): ref ParseError =
     newUnexpectedCharacterException($c)
 
-proc initNotDemand(notQuery: QueryPart): Demand =
+func initNotDemand(notQuery: QueryPart): Demand =
     result = Demand(kind: tkPseudoNot, notQuery: notQuery)
 
-proc initElementDemand(element: string): Demand =
+func initElementDemand(element: string): Demand =
     result = Demand(kind: tkElement, element: element)
 
-proc initPseudoDemand(kind: TokenKind): Demand =
+func initPseudoDemand(kind: TokenKind): Demand =
     result = Demand(kind: kind)
 
-proc initAttributeDemand(kind: TokenKind, name, value: string): Demand =
+func initAttributeDemand(kind: TokenKind, name, value: string): Demand =
     case kind
     of AttributeKinds:
         result = Demand(kind: kind, attrName: name, attrValue: value)
     else:
         raiseAssert "invalid kind: " & $kind
 
-proc initNthChildDemand(kind: TokenKind, a, b: int): Demand =
+func initNthChildDemand(kind: TokenKind, a, b: int): Demand =
     case kind
     of NthKinds:
         result = Demand(kind: kind, a: a, b: b)
     else:
         raiseAssert "invalid kind: " & $kind
 
-proc `$`(demand: Demand): string =
+func `$`(demand: Demand): string =
     case demand.kind:
     of AttributeKinds:
         if demand.kind == tkAttributeExists:
@@ -210,7 +210,7 @@ proc `$`(demand: Demand): string =
     else:
         result = $demand.kind
 
-proc `==`(d1, d2: Demand): bool =
+func `==`(d1, d2: Demand): bool =
     if d1.kind != d2.kind: return false
     case d1.kind
     of AttributeKinds:
@@ -235,13 +235,13 @@ iterator children(node: XmlNode,
             elIdx.inc
         idx.inc
 
-proc initToken(kind: TokenKind, value: string = ""): Token =
+func initToken(kind: TokenKind, value: string = ""): Token =
     return Token(kind: kind, value: value)
 
-proc initQueryPart(demands: seq[Demand], combinator: Combinator): QueryPart =
+func initQueryPart(demands: seq[Demand], combinator: Combinator): QueryPart =
     return QueryPart(demands: demands, combinator: combinator)
 
-proc canFindMultiple(q: Querypart, comb: Combinator,
+func canFindMultiple(q: Querypart, comb: Combinator,
                      options: set[QueryOption]): bool =
     # Returns true if the current queries demands can be satisfied by
     # multiple elements. This is used to check if the search should stop
@@ -257,17 +257,17 @@ proc canFindMultiple(q: Querypart, comb: Combinator,
 
     return true
 
-proc `$`*(q: Query): string =
+func `$`*(q: Query): string =
     ## Returns the original input string used to construct the query
     result = q.queryStr
 
-proc isValidNotQuery(q: Query, options: set[QueryOption]): bool =
+func isValidNotQuery(q: Query, options: set[QueryOption]): bool =
     return
         q.queries.len == 1 and
         q.queries[0].len == 1 and
         (q.queries[0][0].demands.len == 1 or not (optSimpleNot in options))
 
-proc readEscape(input: string, idx: var int, buffer: var string) =
+func readEscape(input: string, idx: var int, buffer: var string) =
     assert input[idx] == '\\'
     idx.inc
 
@@ -300,7 +300,7 @@ proc readEscape(input: string, idx: var int, buffer: var string) =
         except ValueError:
             raiseAssert "Can't happen"
 
-proc readStringLiteral(input: string, idx: var int, buffer: var string) =
+func readStringLiteral(input: string, idx: var int, buffer: var string) =
     assert input[idx] in {'\'', '"'}
 
     let ch = input[idx]
@@ -318,7 +318,7 @@ proc readStringLiteral(input: string, idx: var int, buffer: var string) =
 
     idx.inc
 
-proc readIdentifier(input: string, idx: var int, buffer: var string) =
+func readIdentifier(input: string, idx: var int, buffer: var string) =
     const intIdentifiers = {
         'a'.int .. 'z'.int, 'A'.int .. 'Z'.int,
         '0'.int .. '9'.int,
@@ -331,7 +331,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
                 input.safeCharCompare(idx + 1, {'-'} + Digits)):
         raise newUnexpectedCharacterException(input[idx + 1])
 
-    proc isValidIdentifier(rune: Rune): bool =
+    func isValidIdentifier(rune: Rune): bool =
         if rune.int32 in intIdentifiers:
             return true
         # Spec: https://www.w3.org/TR/CSS21/syndata.html#value-def-identifier
@@ -351,7 +351,7 @@ proc readIdentifier(input: string, idx: var int, buffer: var string) =
             idx.inc unicodeCh.len
             buffer.add unicodeCh
 
-proc readIdentifierAscii(input: string, idx: var int, buffer: var string) =
+func readIdentifierAscii(input: string, idx: var int, buffer: var string) =
     if input[idx] == '-' and input.safeCharCompare(idx + 1, {'-'} + Digits):
         raise newUnexpectedCharacterException(input[idx + 1])
 
@@ -362,7 +362,7 @@ proc readIdentifierAscii(input: string, idx: var int, buffer: var string) =
             buffer.add input[idx]
             idx.inc
 
-proc readParams(input: string, idx: var int, buffer: var string) =
+func readParams(input: string, idx: var int, buffer: var string) =
     # Fragile, ugly, ok
     var paramContextCount = 0
     var dblQuoteStringContext = false
@@ -398,7 +398,7 @@ proc readParams(input: string, idx: var int, buffer: var string) =
 
     idx.inc
 
-proc parsePseudoNthArguments(input: string): tuple[a: int, b: int] =
+func parsePseudoNthArguments(input: string): tuple[a: int, b: int] =
     var buffer = ""
     var idx = 0
     idx.inc skipWhile(input, CssWhitespace, idx)
@@ -453,7 +453,7 @@ proc parsePseudoNthArguments(input: string): tuple[a: int, b: int] =
     if idx <= input.high:
         raise newUnexpectedCharacterException(input[idx])
 
-proc initPseudoToken(str: string): Token =
+func initPseudoToken(str: string): Token =
     let kind = case str
     of ":empty":            tkPseudoEmpty
     of ":only-child":       tkPseudoOnlyChild
@@ -471,7 +471,7 @@ proc initPseudoToken(str: string): Token =
         raise newException(ParseError, "Unknown pseudo selector: " & str)
     result = initToken(kind)
 
-proc isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
+func isFinishedSimpleSelector(prev: Token, prevPrev: Token): bool =
     # Checks if the last two tokens represents the end of a simple selector.
     # This is needed to determine if a space is significant or not.
     if prev.kind in {tkBracketEnd, tkParam, tkElement} + PseudoNoParamsKinds:
@@ -632,19 +632,19 @@ proc eat(lexer: var Lexer, kind: set[TokenKind]): Token =
 proc eat(lexer: var Lexer, kind: TokenKind): Token {.inline.} =
     lexer.eat({kind})
 
-proc hasAttr(node: XmlNode, attr: string): bool {.inline.} =
+func hasAttr(node: XmlNode, attr: string): bool {.inline.} =
     return not node.attrs.isNil and node.attrs.hasKey(attr)
 
-proc validateNth(a, b, nSiblings: int): bool =
+func validateNth(a, b, nSiblings: int): bool =
     if a == 0:
         return nSiblings == b - 1
     let n = (nSiblings - (b - 1)) / a
     return n.floor == n and n >= 0
 
-proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
+func satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
                {.raises: [Defect], gcsafe.}
 
-proc satisfies(pair: NodeWithParent, demand: Demand): bool =
+func satisfies(pair: NodeWithParent, demand: Demand): bool =
     let node = pair.node
 
     case demand.kind
@@ -747,7 +747,7 @@ proc satisfies(pair: NodeWithParent, demand: Demand): bool =
     else:
         raiseAssert "Invalid demand: " & $demand
 
-proc satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
+func satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
     for demand in demands:
         if not pair.satisfies(demand):
             return false
@@ -795,7 +795,7 @@ iterator searchNextSibling(queryPart: QueryPart,
 type SearchIterator = iterator(q: QueryPart,
                                p: NodeWithParent): NodeWithParent {.inline.}
 
-proc exec(parts: seq[QueryPart],
+func exec(parts: seq[QueryPart],
           root: NodeWithParent,
           single: bool,
           options: set[QueryOption],
@@ -830,7 +830,7 @@ proc exec(parts: seq[QueryPart],
         combinator = parts[partIndex].combinator
         partIndex.inc
 
-proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode]
+func exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode]
            {.raises: [Defect].} =
     ## Execute an already parsed query. If `single = true`,
     ## it will never return more than one element.
@@ -847,7 +847,7 @@ proc exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode]
     for parts in query.queries:
         parts.exec(wRoot, single, query.options, result)
 
-proc parseHtmlQuery*(queryString: string,
+func parseHtmlQuery*(queryString: string,
                      options: set[QueryOption] = DefaultQueryOptions): Query
                      {.raises: [Defect, ParseError].} =
     ## Parses a query for later use.
@@ -912,7 +912,7 @@ proc parseHtmlQuery*(queryString: string,
                 else: doAssert(false) # can't happen
 
             of CombinatorKinds:
-                parts.add initQueryPart(demands, lexer.current.kind.ord.Combinator)
+                parts.add initQueryPart(demands, lexer.current.kind.Combinator)
                 demands = @[]
 
             of tkComma:
@@ -944,7 +944,7 @@ proc parseHtmlQuery*(queryString: string,
     log "\ninput: \n" & queryString
     # log "\nquery: \n" & result.debugToString
 
-proc querySelector*(root: XmlNode, queryString: string,
+func querySelector*(root: XmlNode, queryString: string,
                     options: set[QueryOption] = DefaultQueryOptions): XmlNode
                     {.raises: [Defect, ParseError].} =
     ## Get the first element matching `queryString`,
@@ -957,7 +957,7 @@ proc querySelector*(root: XmlNode, queryString: string,
     else:
         nil
 
-proc querySelectorAll*(root: XmlNode, queryString: string,
+func querySelectorAll*(root: XmlNode, queryString: string,
                        options: set[QueryOption] = DefaultQueryOptions):
                        seq[XmlNode] {.raises: [Defect, ParseError].} =
     ## Get all elements matching `queryString`.

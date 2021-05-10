@@ -642,7 +642,7 @@ func validateNth(a, b, nSiblings: int): bool =
     return n.floor == n and n >= 0
 
 func satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
-               {.raises: [Defect], gcsafe.}
+               {.raises: [], gcsafe.}
 
 func satisfies(pair: NodeWithParent, demand: Demand): bool =
     let node = pair.node
@@ -831,7 +831,7 @@ func exec(parts: seq[QueryPart],
         partIndex.inc
 
 func exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode]
-           {.raises: [Defect].} =
+           {.raises: [].} =
     ## Execute an already parsed query. If `single = true`,
     ## it will never return more than one element.
     result = newSeq[XmlNode]()
@@ -849,7 +849,7 @@ func exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode]
 
 func parseHtmlQuery*(queryString: string,
                      options: set[QueryOption] = DefaultQueryOptions): Query
-                     {.raises: [Defect, ParseError].} =
+                     {.raises: [ParseError].} =
     ## Parses a query for later use.
     ## Raises `ParseError` if parsing of `queryString` fails.
     result.queries = @[]
@@ -946,7 +946,7 @@ func parseHtmlQuery*(queryString: string,
 
 func querySelector*(root: XmlNode, queryString: string,
                     options: set[QueryOption] = DefaultQueryOptions): XmlNode
-                    {.raises: [Defect, ParseError].} =
+                    {.raises: [ParseError].} =
     ## Get the first element matching `queryString`,
     ## or `nil` if no such element exists.
     ## Raises `ParseError` if parsing of `queryString` fails.
@@ -959,7 +959,7 @@ func querySelector*(root: XmlNode, queryString: string,
 
 func querySelectorAll*(root: XmlNode, queryString: string,
                        options: set[QueryOption] = DefaultQueryOptions):
-                       seq[XmlNode] {.raises: [Defect, ParseError].} =
+                       seq[XmlNode] {.raises: [ParseError].} =
     ## Get all elements matching `queryString`.
     ## Raises `ParseError` if parsing of `queryString` fails.
     let query = parseHtmlQuery(queryString, options)

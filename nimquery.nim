@@ -912,7 +912,7 @@ func parseHtmlQuery*(queryString: string,
                 else: doAssert(false) # can't happen
 
             of CombinatorKinds:
-                parts.add initQueryPart(demands, lexer.current.kind.Combinator)
+                parts.add initQueryPart(demands, lexer.current.kind.ord.Combinator)
                 demands = @[]
 
             of tkComma:

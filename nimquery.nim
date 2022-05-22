@@ -1,6 +1,6 @@
 # Spec: https://www.w3.org/TR/css3-selectors/
 
-import std / [xmltree, strutils, strtabs, unicode, math, deques, parseutils]
+import std / [xmltree, strutils, strtabs, unicode, math, parseutils, sets]
 
 const DEBUG = false
 
@@ -74,19 +74,12 @@ type
             element: string
         else: discard
 
-    NodeWithParent = tuple
-        parent: XmlNode
-        # Index is the index used by `xmltree`,
-        # elementIndex is the index when only counting elements
-        # (not text nodes etc).
-        index, elementIndex: int
-
     Combinator = enum
         cmDescendants = tkCombinatorDescendents,
         cmChildren = tkCombinatorChildren,
         cmNextSibling = tkCombinatorNextSibling,
         cmSiblings = tkCombinatorSiblings,
-        cmLeaf # Special case for the last query
+        cmRoot # Special case for the first query
 
     QueryOption* = enum
         optUniqueIds          ## Assume unique id's or not
@@ -102,13 +95,25 @@ type
         current, next: Token
 
     Query* = object ## Represents a parsed query.
-        queries: seq[seq[QueryPart]]
+        subqueries: seq[seq[QueryPart]]
         options: set[QueryOption]
         queryStr: string ## The original input string
 
     QueryPart = object
         demands: seq[Demand]
         combinator: Combinator
+
+    # Used during the search to keep track which parts of the subqueries
+    # have already been matched.
+    NodeWithContext = object
+        # We need access to the siblings of the node
+        # which we get through the parent.
+        parent: XmlNode
+        # Index is the index used by `xmltree`,
+        # elementIndex is the index when only counting elements
+        # (not text nodes etc).
+        index, elementIndex: int
+        searchStates: HashSet[(int, int)]
 
 {.deprecated: [NimqueryOption: QueryOption].}
 
@@ -136,9 +141,9 @@ const CombinatorKinds = {
     tkCombinatorNextSibling, tkCombinatorSiblings
 }
 
-template log(msg: string) =
+template log(x: varargs[untyped]) =
     when DEBUG:
-        echo msg
+        debugEcho x
 
 func safeCharCompare(str: string, idx: int, cs: set[char]): bool {.inline.} =
     if idx > high(str): return false
@@ -148,7 +153,7 @@ func safeCharCompare(str: string, idx: int, cs: set[char]): bool {.inline.} =
 func safeCharCompare(str: string, idx: int, c: char): bool {.inline.} =
     return str.safeCharCompare(idx, {c})
 
-func node(pair: NodeWithParent): XmlNode =
+func node(pair: NodeWithContext): XmlNode =
     return pair.parent[pair.index]
 
 func attrComparerString(kind: TokenKind): string =
@@ -224,16 +229,15 @@ func `==`(d1, d2: Demand): bool =
     else:
         raise newException(Exception, "Invalid demand kind: " & $d1.kind)
 
-iterator children(node: XmlNode,
-                  offset: NodeWithParent = (nil, -1, -1)): NodeWithParent =
-    var idx = offset.index + 1
-    var elIdx = offset.elementIndex + 1
-    while idx < node.len:
-        let el = node[idx]
-        if el.kind == xnElement:
-            yield (parent: node, index: idx, elementIndex: elIdx).NodeWithParent
-            elIdx.inc
-        idx.inc
+iterator siblings(pair: NodeWithContext,
+                  startAtIndex = 0): XmlNode =
+    if pair.parent != nil:
+        var idx = startAtIndex
+        while idx < pair.parent.len:
+            let el = pair.parent[idx]
+            if el.kind == xnElement:
+                yield el
+            idx.inc
 
 func initToken(kind: TokenKind, value: string = ""): Token =
     return Token(kind: kind, value: value)
@@ -241,20 +245,18 @@ func initToken(kind: TokenKind, value: string = ""): Token =
 func initQueryPart(demands: seq[Demand], combinator: Combinator): QueryPart =
     return QueryPart(demands: demands, combinator: combinator)
 
-func canFindMultiple(q: Querypart, comb: Combinator,
-                     options: set[QueryOption]): bool =
-    # Returns true if the current queries demands can be satisfied by
-    # multiple elements. This is used to check if the search should stop
-    # after the first element has been found.
-    for demand in q.demands:
+func canFindMultiple(q: seq[QueryPart], options: set[QueryOption]): bool =
+    ## Returns true if the subquery ``q`` can match multiple elements.
+    var lastPart = q[^1]
+    for demand in lastPart.demands:
         if optUniqueIds in options and demand.kind in AttributeKinds and
                 demand.attrName == "id":
             return false
-        if comb in {cmChildren, cmSiblings} and demand.kind in
+        if lastPart.combinator in {cmChildren, cmSiblings} and demand.kind in
                 {tkPseudoFirstOfType, tkPseudoLastOfType,
                     tkPseudoFirstChild, tkPseudoLastChild, tkPseudoOnlyOfType}:
             return false
-
+    
     return true
 
 func `$`*(q: Query): string =
@@ -263,9 +265,9 @@ func `$`*(q: Query): string =
 
 func isValidNotQuery(q: Query, options: set[QueryOption]): bool =
     return
-        q.queries.len == 1 and
-        q.queries[0].len == 1 and
-        (q.queries[0][0].demands.len == 1 or not (optSimpleNot in options))
+        q.subqueries.len == 1 and
+        q.subqueries[0].len == 1 and
+        (q.subqueries[0][0].demands.len == 1 or not (optSimpleNot in options))
 
 func readEscape(input: string, idx: var int, buffer: var string) =
     assert input[idx] == '\\'
@@ -641,10 +643,10 @@ func validateNth(a, b, nSiblings: int): bool =
     let n = (nSiblings - (b - 1)) / a
     return n.floor == n and n >= 0
 
-func satisfies(pair: NodeWithParent, demands: seq[Demand]): bool
+func satisfies(pair: NodeWithContext, demands: seq[Demand]): bool
                {.raises: [], gcsafe.}
 
-func satisfies(pair: NodeWithParent, demand: Demand): bool =
+func satisfies(pair: NodeWithContext, demand: Demand): bool =
     let node = pair.node
 
     case demand.kind
@@ -684,15 +686,14 @@ func satisfies(pair: NodeWithParent, demand: Demand): bool =
         return node.len == 0
 
     of tkPseudoOnlyChild:
-        for siblingPair in pair.parent.children:
-            if siblingPair.node != node:
+        for sibling in pair.siblings:
+            if sibling != node:
                 return false
         return true
 
     of tkPseudoOnlyOfType:
-        for siblingPair in pair.parent.children:
-            if siblingPair.node != node and
-                    siblingPair.node.tag == node.tag:
+        for sibling in pair.siblings:
+            if sibling != node and sibling.tag == node.tag:
                 return false
         return true
 
@@ -700,18 +701,18 @@ func satisfies(pair: NodeWithParent, demand: Demand): bool =
         return pair.elementIndex == 0
 
     of tkPseudoLastChild:
-        for siblingPair in pair.parent.children(offset = pair):
+        for sibling in pair.siblings(startAtIndex = pair.index + 1):
             return false
         return true
 
     of tkPseudoFirstOfType:
-        for siblingPair in pair.parent.children:
-            if siblingPair.node.tag == node.tag:
-                return siblingPair.node == node
+        for sibling in pair.siblings:
+            if sibling.tag == node.tag:
+                return sibling == node
 
     of tkPseudoLastOfType:
-        for siblingPair in pair.parent.children(offset = pair):
-            if siblingPair.node.tag == node.tag:
+        for sibling in pair.siblings(startAtIndex = pair.index + 1):
+            if sibling.tag == node.tag:
                 return false
         return true
 
@@ -723,140 +724,124 @@ func satisfies(pair: NodeWithParent, demand: Demand): bool =
 
     of tkPseudoNthLastChild:
         var nSiblingsAfter = 0
-        for siblingPair in pair.parent.children(offset = pair):
+        for sibling in pair.siblings(startAtIndex = pair.index + 1):
             nSiblingsAfter.inc
         return validateNth(demand.a, demand.b, nSiblingsAfter)
 
     of tkPseudoNthOfType:
         var nSiblingsOfTypeBefore = 0
-        for siblingPair in pair.parent.children:
-            if siblingPair.node == node:
+        for sibling in pair.siblings:
+            if sibling == node:
                 break
-            elif siblingPair.node.tag == node.tag:
+            elif sibling.tag == node.tag:
                 nSiblingsOfTypeBefore.inc
 
         return validateNth(demand.a, demand.b, nSiblingsOfTypeBefore)
 
     of tkPseudoNthLastOfType:
         var nSiblingsOfTypeAfter = 0
-        for siblingPair in pair.parent.children(offset = pair):
-            if siblingPair.node.tag == node.tag:
+        for sibling in pair.siblings(startAtIndex = pair.index + 1):
+            if sibling.tag == node.tag:
                 nSiblingsOfTypeAfter.inc
 
             return validateNth(demand.a, demand.b, nSiblingsOfTypeAfter)
     else:
         raiseAssert "Invalid demand: " & $demand
 
-func satisfies(pair: NodeWithParent, demands: seq[Demand]): bool =
+func satisfies(pair: NodeWithContext, demands: seq[Demand]): bool =
     for demand in demands:
         if not pair.satisfies(demand):
             return false
     return true
 
-iterator searchDescendants(queryPart: QueryPart,
-                           position: NodeWithParent): NodeWithParent =
-    var queue = initDeque[NodeWithParent]()
-    for nodeData in position.node.children:
-        queue.addLast((parent: position.node, index: nodeData.index,
-            elementIndex: nodeData.elementIndex))
-
-    while queue.len > 0:
-        let pair = queue.popFirst()
-        if pair.satisfies queryPart.demands:
-            yield pair
-
-        for nodeData in pair.node.children:
-            queue.addLast((parent: pair.node, index: nodeData.index,
-                elementIndex: nodeData.elementIndex))
-
-iterator searchChildren(queryPart: QueryPart,
-                        position: NodeWithParent): NodeWithParent =
-    for pair in position.node.children:
-        if pair.satisfies queryPart.demands:
-            yield pair
-
-iterator searchSiblings(queryPart: QueryPart,
-                        position: NodeWithParent): NodeWithParent =
-    for pair in position.parent.children(offset = position):
-        if pair.satisfies queryPart.demands:
-            yield pair
-
-iterator searchNextSibling(queryPart: QueryPart,
-                           position: NodeWithParent): NodeWithParent =
-    # It's a bit silly to have an iterator which will only yield 0 or 1
-    # element, but it's nice for consistency with how the other
-    # combinators are implemented.
-
-    for pair in position.parent.children(offset = position):
-        if pair.satisfies queryPart.demands:
-            yield pair
-        break # by definition, there can only be one next sibling
-
-type SearchIterator = iterator(q: QueryPart,
-                               p: NodeWithParent): NodeWithParent {.inline.}
-
-func exec(parts: seq[QueryPart],
-          root: NodeWithParent,
-          single: bool,
-          options: set[QueryOption],
-          result: var seq[XmlNode]) =
-    var combinator = cmDescendants
-    var buffer = initDeque[NodeWithParent]()
-    var partIndex = 0
-    buffer.addLast root
-
-    template search(position: NodeWithParent, itr: SearchIterator) =
-        for next in itr(parts[partIndex], position):
-            if partIndex == high(parts):
-                result.add next.node
-                if single:
-                    return
-            else:
-                buffer.addLast next
-
-            if not parts[partIndex].canFindMultiple(combinator, options):
-                break
-
-    while buffer.len > 0:
-        for _ in 0..<buffer.len:
-            let position = buffer.popFirst
-            case combinator
-            of cmDescendants: search(position, searchDescendants)
-            of cmChildren:    search(position, searchChildren)
-            of cmSiblings:    search(position, searchSiblings)
-            of cmNextSibling: search(position, searchNextSibling)
-            of cmLeaf: discard
-
-        combinator = parts[partIndex].combinator
-        partIndex.inc
-
-func exec*(query: Query, root: XmlNode, single: bool): seq[XmlNode]
-           {.raises: [].} =
+func exec*(query: Query, node: XmlNode, single: bool): seq[XmlNode] =
     ## Execute an already parsed query. If `single = true`,
     ## it will never return more than one element.
-    result = newSeq[XmlNode]()
+  
+    var initialStates = initHashSet[(int, int)]()
+    for idx, s in query.subqueries:
+        initialStates.incl (idx, 0)
 
-    # The <wrapper> element is needed due to how execRecursive is implemented.
-    # The "current" position is never matched against,
-    # only the childs/siblings (depending on combinator). So to make sure that
-    # the original root is tested, we need to set the starting position to an
-    # imaginary wrapper element. Since `NodeWIthParent` always require a parent,
-    # we also add a wrapper-root element.
-    let wrapper = <>wrapper(root)
-    let wRoot = (parent: <>"wrapper-root"(wrapper), index: 0, elementIndex: 0)
-    for parts in query.queries:
-        parts.exec(wRoot, single, query.options, result)
+    var stack = @[NodeWithContext(parent: <>"wrapper"(node), index: 0, elementIndex: 0, searchStates: initialStates )]
+    # Certain queries (e.g queries ending with an id selector) can be eliminated and doesn't need to be checked
+    # anymore after the first match. These seqs are mapped to the subqueries by index.
+    var subqueryCanBeEliminated = newSeq[bool](query.subqueries.len)
+    var subqueryIsEliminated = newSeq[bool](query.subqueries.len)
+
+    for idx, subquery in query.subqueries:
+        subqueryCanBeEliminated[idx] = not canFindMultiple(subquery, query.options)
+
+    while stack.len > 0:
+        var entry = stack.pop()
+
+        # Search states that should be forwarded to children
+        var forChildren = initHashSet[(int, int)]()
+        # Search states that should be forwarded to siblings
+        var forSiblings = initHashSet[(int, int)]()
+
+        for searchState in entry.searchStates:
+            if subqueryIsEliminated[searchState[0]]:
+                continue
+
+            let subquery = query.subqueries[searchState[0]]
+            let subqueryPart = subquery[searchState[1]]
+
+            if subqueryPart.combinator == cmDescendants or subqueryPart.combinator == cmRoot:
+                forChildren.incl searchState
+                forSiblings.incl searchState
+            elif subqueryPart.combinator == cmSiblings or subqueryPart.combinator == cmChildren:
+                forSiblings.incl searchState
+
+            if entry.satisfies(subqueryPart.demands):
+                if searchState[1] + 1 == subquery.len:
+                    result.add entry.node
+                    if single:
+                        return
+                    if subqueryCanBeEliminated[searchState[0]]:
+                        subqueryIsEliminated[searchState[0]] = true
+                else:
+                    let nextSubqueryPart = subquery[searchState[1] + 1]
+                    if nextSubqueryPart.combinator == cmChildren or nextSubqueryPart.combinator == cmDescendants:
+                        forChildren.incl (searchState[0], searchState[1] + 1)
+                    elif nextSubqueryPart.combinator == cmNextSibling or nextSubqueryPart.combinator == cmSiblings:
+                        forSiblings.incl (searchState[0], searchState[1] + 1)
+
+        # Below results in a depth first search.
+
+        # Add next sibling to stack
+        if entry.parent != nil:
+            var idx = entry.index + 1
+            while idx < entry.parent.len and entry.parent[idx].kind != xnElement:
+                idx.inc
+            if idx < entry.parent.len:
+                stack.add NodeWithContext(
+                    parent: entry.parent,
+                    index: idx,
+                    elementIndex: entry.elementIndex + 1,
+                    searchStates: forSiblings)
+
+        # Add first child to stack
+        if entry.node.len > 0:
+            var idx = 0
+            while idx < entry.node.len and entry.node[idx].kind != xnElement:
+                idx.inc
+            if idx < entry.node.len:
+                stack.add NodeWithContext(
+                    parent: entry.node,
+                    index: idx,
+                    elementIndex: 0,
+                    searchStates: forChildren)
 
 func parseHtmlQuery*(queryString: string,
                      options: set[QueryOption] = DefaultQueryOptions): Query
                      {.raises: [ParseError].} =
     ## Parses a query for later use.
     ## Raises `ParseError` if parsing of `queryString` fails.
-    result.queries = @[]
     result.queryStr = queryString
     var parts = newSeq[QueryPart]()
     var demands = newSeq[Demand]()
     var lexer = initLexer(queryString, options)
+    var combinator = cmRoot
 
     try:
         while true:
@@ -905,21 +890,23 @@ func parseHtmlQuery*(queryString: string,
                             ":not argument must be a simple selector, but " &
                             "was '" & params.value & "'")
 
-                    demands.add initNotDemand(notQuery.queries[0][0])
+                    demands.add initNotDemand(notQuery.subqueries[0][0])
                 of NthKinds:
                     let (a, b) = parsePseudoNthArguments(params.value)
                     demands.add initNthChildDemand(pseudoKind, a, b)
                 else: doAssert(false) # can't happen
 
             of CombinatorKinds:
-                parts.add initQueryPart(demands, lexer.current.kind.ord.Combinator)
+                parts.add initQueryPart(demands, combinator)
                 demands = @[]
+                combinator = lexer.current.kind.ord.Combinator
 
             of tkComma:
-                parts.add initQueryPart(demands, cmLeaf)
-                result.queries.add parts
+                parts.add initQueryPart(demands, combinator)
+                result.subqueries.add parts
                 demands = @[]
                 parts = @[]
+                combinator = cmRoot
 
             of tkIdentifier, tkString, tkBracketEnd,
                     tkParam, tkInvalid, AttributeKinds:
@@ -937,12 +924,11 @@ func parseHtmlQuery*(queryString: string,
                 "Failed to parse CSS query '" & queryString & "': " & err.msg
         raise newException(ParseError, msg)
 
-    parts.add initQuerypart(demands, cmLeaf)
-    result.queries.add parts
+    parts.add initQuerypart(demands, combinator)
+    result.subqueries.add parts
     result.options = options
 
     log "\ninput: \n" & queryString
-    # log "\nquery: \n" & result.debugToString
 
 func querySelector*(root: XmlNode, queryString: string,
                     options: set[QueryOption] = DefaultQueryOptions): XmlNode

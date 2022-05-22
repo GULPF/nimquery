@@ -12,7 +12,6 @@ nimble install nimquery
 ```nim
 from xmltree import `$`
 from htmlparser import parseHtml
-from streams import newStringStream
 import nimquery
 
 let html = """
@@ -27,7 +26,7 @@ let html = """
   </body>
 </html>
 """
-let xml = parseHtml(newStringStream(html))
+let xml = parseHtml(html)
 let elements = xml.querySelectorAll("p:nth-child(odd)")
 echo elements
 # => @[<p>1</p>, <p>3</p>]

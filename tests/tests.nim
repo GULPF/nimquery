@@ -190,6 +190,23 @@ const html = """
             <p></p>
         </div>
 
+        <div id="test43">
+            <div class="a">
+                <div class="b"></div>
+                <div class="c a">
+                    <div class="b"></div>
+                    <div class="c">
+                        <div class="e"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="test44">
+            <div id="a"></div>
+            <div id="a"></div>
+        </div>
+
         <div id="issue1">
             <p>1</p>
             <p>2</p>
@@ -532,9 +549,39 @@ test "numeric class name":
     expect ParseError:
         discard parseHtmlQuery(".43")
 
+test "overlapping path":
+    let els = xml.querySelectorAll("#test43 .a .b + .c > .e");
+    check($els == """@[<div class="e" />]""")
+
+test "duplicate id":
+    var els = xml.querySelectorAll("#test44 #a")
+    check(els.len == 1)
+    els = xml.querySelectorAll("#test44 #a", DefaultQueryOptions - { optUniqueIds })
+    check(els.len == 2)
+
 test "issue1":
     let els = xml.querySelectorAll("#issue1 p")
     check($els == "@[<p>1</p>, <p>2</p>, <p>3</p>, <p>4</p>]")
+
+test "issue11":
+    let xml = parseHtml(newStringStream("""
+        <div class="key">A</div><div class="value">x</div>
+        <div class="key">B</div><div class="value">y</div>
+    """))
+    let els = xml.querySelectorAll(".key, .value")
+    check($els == """@[<div class="key">A</div>, <div class="value">x</div>, <div class="key">B</div>, <div class="value">y</div>]""")
+
+test "issue13":
+    let xml = parseHtml(newStringStream("""
+        <td class="some">
+            <a href="">
+                <span><b>text1</b></span>
+                <b>text2</b>
+            </a>
+        </td>
+    """))
+    let els = xml.querySelectorAll("b")
+    check($els == "@[<b>text1</b>, <b>text2</b>]")
 
 block checkIfGcSafe:
     proc foo =

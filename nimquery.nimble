@@ -1,6 +1,6 @@
 # Package
 
-version       = "1.2.3"
+version       = "2.0.0"
 author        = "Oscar Nihlgård"
 description   = "Library for querying HTML using CSS-selectors (like JavaScripts document.querySelector)"
 license       = "MIT"

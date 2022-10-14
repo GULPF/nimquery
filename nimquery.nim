@@ -196,7 +196,7 @@ func initNthChildDemand(kind: TokenKind, a, b: int): Demand =
     else:
         raiseAssert "invalid kind: " & $kind
 
-func `$`(demand: Demand): string =
+func `$`(demand: Demand): string {.raises: [].} =
     case demand.kind:
     of AttributeKinds:
         if demand.kind == tkAttributeExists:

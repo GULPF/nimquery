@@ -322,9 +322,9 @@ func readStringLiteral(input: string, idx: var int, buffer: var string) =
 
 func readIdentifier(input: string, idx: var int, buffer: var string) =
     const intIdentifiers = {
-        'a'.int .. 'z'.int, 'A'.int .. 'Z'.int,
-        '0'.int .. '9'.int,
-        '-'.int, '_'.int, '\\'.int
+        'a' .. 'z', 'A' .. 'Z',
+        '0' .. '9',
+        '-', '_', '\\'
     }
 
     if input[idx] == '_' or
@@ -334,7 +334,7 @@ func readIdentifier(input: string, idx: var int, buffer: var string) =
         raise newUnexpectedCharacterException(input[idx + 1])
 
     func isValidIdentifier(rune: Rune): bool =
-        if rune.int32 in intIdentifiers:
+        if rune.char in intIdentifiers:
             return true
         # Spec: https://www.w3.org/TR/CSS21/syndata.html#value-def-identifier
         return rune >=% 0x00A0.Rune
